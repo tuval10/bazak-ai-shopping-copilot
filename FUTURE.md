@@ -52,6 +52,18 @@ analytics program is deferred:
 - *Note:* a basic loading/typing indicator is the minimum worth keeping for UX even if the rest is
   deferred.
 
+## LLM-Assisted Input & Follow-ups
+
+- **Query autocomplete** — as the user types, use the LLM to predict and complete the request inline
+  (ghost-text suggestions), grounded in the catalog so completions point at things actually for sale
+  ("running shoes under $..." → "$80"). Debounce keystrokes and cache to keep cost/latency sane.
+- **Suggested follow-ups** — after each answer, surface 2–3 tappable next-step chips the model proposes
+  from the conversation and results (e.g. "show cheaper alternatives", "compare the top two", "only
+  in-stock"), turning discovery into a guided flow instead of a blank prompt.
+- *Why deferred:* both are conversational-polish features that raise model calls per turn; the core
+  free-text loop works without them. Revisit alongside the Performance Budget so the extra calls run
+  under the same latency/cost guardrails.
+
 ## Richer Product Views
 
 - **Product detail view / "tell me more"** (was US-2.2) — drill into a single product via

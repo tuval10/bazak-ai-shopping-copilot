@@ -9,6 +9,7 @@ the DummyJSON catalog through natural-language chat.
 |----------|--------------|
 | [assignment.MD](assignment.MD) | The original assignment brief — overview, requirements, deliverables, and the questions this README must ultimately answer. The source of truth for *what's being asked*. |
 | [USER_STORIES.md](USER_STORIES.md) | What we're building and how it should behave — in-scope user stories grouped into epics, with acceptance criteria and a decision log for every edge case (ambiguous / off-catalog / chit-chat / multi-intent / no-results / follow-ups). The source of truth for *scope and intended behavior*. |
+| [DECISIONS.md](DECISIONS.md) | Architecture decision log — topology, orchestration, persistence (server-owned, append-only JSONL), routing, and the response payload, each with rationale and rejected alternatives. The source of truth for *why it's built this way*. |
 | [FUTURE.md](FUTURE.md) | Deliberately deferred scope (security/abuse controls, profile & personalization, analytics, performance budget, richer product views) — so the cuts are intentional rather than forgotten. |
 
 > Setup/run instructions, architecture rationale, retrieval strategy, and evaluation details will be
