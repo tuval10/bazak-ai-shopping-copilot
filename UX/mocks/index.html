@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  Bazak AI Shopping Copilot — UX mocks index.
+  Static, high-fidelity mockups (Tailwind via CDN). No build step: open in any browser.
+  These are review artifacts, not a working app — interactive states are stacked on the page.
+  The colour palette is a PROPOSAL (no brand guide exists yet) and is easy to swap.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bazak Copilot — UX Mocks</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  colors: { bazak: { DEFAULT:'#6366f1', dark:'#4f46e5', light:'#eef2ff' } },
+  fontFamily: { sans:['system-ui','-apple-system','Segoe UI','Roboto','Helvetica','Arial','sans-serif'] }
+} } }
+</script>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen">
+  <div class="max-w-3xl mx-auto px-6 py-16">
+    <header class="mb-10">
+      <div class="flex items-center gap-3 mb-3">
+        <div class="w-10 h-10 rounded-xl bg-bazak text-white grid place-items-center font-bold text-lg">B</div>
+        <div>
+          <h1 class="text-2xl font-bold text-slate-900">Bazak AI Shopping Copilot</h1>
+          <p class="text-sm text-slate-500">UX mockups — visual reference for the screens & components</p>
+        </div>
+      </div>
+      <p class="text-sm text-slate-600 leading-relaxed">
+        High-fidelity static mocks built from
+        <a class="text-bazak font-medium hover:underline" href="../SCREENS.md">SCREENS.md</a> and
+        <a class="text-bazak font-medium hover:underline" href="../COMPONENTS.md">COMPONENTS.md</a>.
+        Each file stacks the documented states on one page for review. Palette is a proposal.
+      </p>
+    </header>
+
+    <nav class="grid gap-4">
+      <a href="conversation.html" class="block bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-bazak/40 transition p-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">Conversation</h2>
+          <span class="text-bazak text-sm">View →</span>
+        </div>
+        <p class="text-sm text-slate-500 mt-1">The chat screen — empty, awaiting, results, multi-intent, no-results, off-catalog, error.</p>
+      </a>
+      <a href="conversations-list.html" class="block bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-bazak/40 transition p-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">Conversations List</h2>
+          <span class="text-bazak text-sm">View →</span>
+        </div>
+        <p class="text-sm text-slate-500 mt-1">Resume / search / start chats — populated, empty, and no-match states.</p>
+      </a>
+      <a href="components.html" class="block bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md hover:border-bazak/40 transition p-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-slate-900">Component Gallery</h2>
+          <span class="text-bazak text-sm">View →</span>
+        </div>
+        <p class="text-sm text-slate-500 mt-1">The 5 components in isolation: user message, bot message, product catalog, no-results, loading.</p>
+      </a>
+    </nav>
+
+    <footer class="mt-12 text-xs text-slate-400">
+      Static mock · Tailwind via CDN · product images from the DummyJSON catalog · palette = proposal.
+    </footer>
+  </div>
+</body>
+</html>
