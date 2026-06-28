@@ -97,6 +97,9 @@ As a user, I want results shown as rich cards in the conversation so that I can 
 
 ## Epic 3 — Conversation Persistence & Management
 
+> Persistence is server-side via **Mastra Memory threads** (see DECISIONS.md D4): each conversation is
+> a thread; the server loads/saves it by id.
+
 ### US-3.1 — Keep my chat across refreshes
 As a user, I want my conversation to survive a page reload so that I never lose my place.
 
@@ -188,8 +191,9 @@ As a user, I want a helpful message instead of a crash when something breaks so 
 - If the catalog API or the model errors or times out, the bot returns a friendly fallback and a
   suggested next step — never a crash, blank screen, or stack trace.
 - Partial failures in a multi-intent request degrade gracefully (return what succeeded, flag what didn't).
-- Covers conversation-storage failure scenarios too: storage quota exceeded, corrupted saved state,
-  and the user clearing storage mid-conversation are handled without losing the app or crashing.
+- Covers conversation-store failures too: the server store (Mastra Memory / LibSQL) erroring on
+  read/write, a corrupted record, or disk-full are handled without crashing the app or surfacing a
+  raw DB error.
 
 ---
 
@@ -206,6 +210,45 @@ As the team, I want automated checks over the core path so that regressions are 
 
 ---
 
+## Epic 7 — Personalization (via Mastra working memory)
+
+Brought into scope because Mastra's **working memory** makes the learn → remember → personalize loop
+nearly config-level (see DECISIONS.md D4/D7). UI-heavy parts (onboarding form, full profile editor,
+retrieval-side ranking) stay deferred — see FUTURE.md.
+
+### US-7.1 — Remember my preferences across conversations
+As a user, I want the bot to remember preferences I mention so that I don't repeat myself across
+sessions.
+
+- Preferences stated in chat ("I'm vegan", "budget ~$50") are extracted and stored in per-user working
+  memory, automatically.
+- They **persist across conversations** (per-user scope) and survive refresh.
+- No separate "save" step; storing is implicit.
+
+### US-7.2 — Personalized recommendations
+As a user, I want recommendations to reflect what the bot knows about me so that results feel relevant.
+
+- Remembered preferences sit in the model's context, so replies/recommendations account for them
+  (generation-side personalization).
+- An explicit in-conversation request takes priority over a stored preference when they conflict
+  (e.g. "show me premium ones" overrides a remembered budget for that turn; see US-4.5).
+
+### US-7.3 — First-time conversational onboarding
+As a new user, I want a light, optional intro so that the bot can tailor results from the start —
+without filling in a form.
+
+- On the **first** session with a new user (no working memory yet), the bot asks 1–2 optional
+  questions and stores answers to working memory.
+- Fully skippable; not repeated for returning users.
+
+### US-7.4 — See & reset what's remembered
+As a user, I want to see what the bot remembers and be able to clear it so that I stay in control.
+
+- A minimal view shows the remembered preferences (read-only) with a **reset/clear** action.
+- No per-field editing in scope (deferred — see FUTURE.md).
+
+---
+
 ## Decision Log (edge cases)
 
 | Case | Decision |
@@ -218,3 +261,4 @@ As the team, I want automated checks over the core path so that regressions are 
 | Follow-up / refinement | Full context carryover (implicit refinements + references) |
 | Grounding & reliability | Only show real catalog data (no fabrication) · graceful failure + storage-failure handling |
 | Retrieval (API limits) | No server-side price/rating/brand/stock filter → pick best endpoint (search / category) + filter & sort client-side · map terms to real categories · surface availability + deals |
+| Personalization | Learn + persist prefs (Mastra working memory) · personalized replies · first-time conversational onboarding · see & reset (no edit) |

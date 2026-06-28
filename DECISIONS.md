@@ -2,7 +2,7 @@
 
 A running log of architectural decisions, why they were made, and the alternatives rejected.
 Lightweight ADR style. See [USER_STORIES.md](USER_STORIES.md) for scope and [FUTURE.md](FUTURE.md)
-for deferred work. All entries: **Status — Accepted (2026-06-24).**
+for deferred work. Entries are **Accepted**; revised or newly added entries note their date.
 
 ---
 
@@ -53,7 +53,8 @@ the conversation from the server by id.
 | `POST /conversations/{id}/messages` → run pipeline, persist, reply | US-1.x, US-4.x |
 
 **Why:** Persistence requirement (US-3.1) is satisfied server-side; the client stays genuinely thin;
-no server-side *session* coupling beyond loading a conversation by id.
+no server-side *session* coupling beyond loading a conversation by id. The store itself is **Mastra
+Memory** (D4) — these endpoints are thin wrappers over its API.
 
 **Alternatives rejected:**
 - *Client-owned persistence* (localStorage/IndexedDB, stateless server) — viable, but the user chose
@@ -61,58 +62,48 @@ no server-side *session* coupling beyond loading a conversation by id.
 
 ---
 
-## D4 — Conversation storage format: append-only JSONL, one file per conversation
+## D4 — Conversation storage: Mastra Memory (LibSQL)  ·  *revised 2026-06-28*
 
-**Decision:** Each conversation is a single append-only `.jsonl` file; every turn/event is one line
-(with a `version` tag). Reads replay the file; writes are `open(O_APPEND); write()`. Conversation
-list = directory scan; search (US-3.4) = scan/replay files into an in-memory filter/index.
+**Decision:** Use **Mastra Memory** as the single conversation store — **threads** hold the message
+transcript and **working memory** holds per-user preferences — backed by **LibSQL** (Mastra's
+default; a local SQLite engine). The persistence endpoints (D3) are thin wrappers over the Mastra
+Memory API.
 
-**Why (this workload is natively an immutable event log, not relational state):**
-1. **Crash-safe appends with zero machinery.** Appending a line is about as atomic as filesystem ops
-   get; a torn final line after a crash is just discarded and the rest stays intact — no WAL/journal
-   coordination needed.
-2. **No write-contention to manage.** Single-user, one append per turn means there's effectively no
-   concurrency — so SQLite's write-lock layer (`SQLITE_BUSY`, "database is locked") would be
-   machinery for a problem we don't have. One-file-per-conversation keeps it that way if turns ever
-   overlap.
-3. **Schema-free fits a heterogeneous payload.** A turn is a deeply nested, irregular blob (text,
-   tool calls, tool results of varied shapes, usage stats, new fields over time). The per-line
-   `version` tag handles format drift far more cheaply than `ALTER TABLE` migrations.
-4. **Transparent, inspectable storage (dev-time).** JSONL is greppable, `jq`-able, and diff-able, so
-   debugging and eval (US-6.1 reads the turn log) are "look at the file" — no DB client or SQL. A
-   development convenience; end users never see the store.
-5. **Append-only structurally enforces immutability.** The data model never mutates past events; a
-   file you only append to resists `UPDATE`/`DELETE`, so the medium enforces the model's intent.
-6. **No migration burden.** Old and new line versions coexist in one file; no schema migration to run
-   against existing data.
+> **Supersedes** the original D4 (append-only JSONL, one file per conversation). This reverses that
+> decision deliberately — see *Why changed* below.
 
-**Failure handling (US-5.2):** torn last line on crash → discard it; malformed lines → skip and
-continue; disk full / write error → fail the turn gracefully without corrupting prior history.
+**Why:**
+- We committed to **Mastra** for orchestration (D7). Letting it also own persistence removes an entire
+  hand-rolled layer (transcript write/replay + conversation list/search) — native **threads** give
+  list/resume/search out of the box (US-3.x).
+- **Working memory** delivers the personalization loop (Epic 7) at near-config cost — learn, persist
+  per-user, personalize replies — which is what motivated the change.
+- **Semantic recall** (vector search over past messages, LibSQL + FastEmbed) is then available for the
+  agentic future we're future-proofing for (D7); messages are already in the store.
+- Single store, less code, fewer moving parts to defend.
+
+**Why changed (honesty note):** the original JSONL decision leaned on **concurrency** and
+**portability** advantages we later conceded are weak for a *single-user, local* app. Its remaining
+pros (crash-safe appends, greppable transparency) are nice-to-haves now covered by **Mastra Studio +
+OpenTelemetry tracing**. Once personalization came "for free" with working memory and we were already
+on Mastra + LibSQL, a separate JSONL transcript stopped earning its keep.
+
+**Failure handling (US-5.2):** LibSQL is a durable embedded SQLite engine (WAL, atomic commits);
+handle write/disk errors gracefully and never surface a raw DB error to the user.
 
 **Alternatives rejected:**
-- *SQLite* — also crash-safe, but buys indexed queries, partial mutation, and referential integrity
-  that this append-heavy, immutable workload barely uses, at the cost of locking, migrations,
-  opacity, and a query layer. You'd likely store JSON in a TEXT column anyway.
-- *JSON file rewritten in place* — whole-file rewrites risk partial-write corruption and aren't
-  append-atomic.
-- *In-memory + periodic snapshot* — loses recent turns on crash; weakest persistence guarantee.
-
-**Accepted trade-off:** cross-conversation search (US-3.4) has no built-in index, so it's an
-in-memory scan over files. That's fine at local single-user scale — indexing-for-search is an
-occasional, derivable, offline concern, while crash-safe appends must be bulletproof every turn. If
-search ever needs to scale, build a derived index on top of the JSONL (the log stays the source of
-truth).
-
-**Principle:** *Use a database for queries, mutation, and concurrency over shared structured state;
-use an append-only log for durable, ordered, immutable events.* A conversation transcript is the
-second.
+- *Append-only JSONL, one file per conversation* — the prior choice; clean for an immutable transcript
+  and transparent to inspect, but a second bespoke store that duplicates what Mastra threads give for
+  free and can't back semantic recall. Reasonable, but redundant once we're on Mastra.
+- *Postgres / other Mastra storage adapters* — fine, but heavier to run locally than LibSQL's single
+  file; revisit if we outgrow local single-user.
 
 ---
 
 ## D5 — Client conversation pointer: URL route `/c/{id}`
 
-**Decision:** The active conversation id lives in the URL (`/c/{id}`). Refresh reloads the route and
-re-fetches from the server (US-3.1).
+**Decision:** The active conversation id lives in the URL (`/c/{id}`) — the id is the **Mastra thread
+id** (D4). Refresh reloads the route and re-fetches from the server (US-3.1).
 
 **Why:** No extra browser state to manage; bonus back/forward navigation and shareable/bookmarkable
 conversations.
@@ -141,3 +132,33 @@ each entry is one intent with its own `products` array. Multi-intent → multipl
 **Why:** Clean separation — the server shapes data, the client owns presentation (US-2.1); multi-intent
 (US-1.3) falls out naturally as multiple arrays. Grounding (US-5.1) is enforced server-side: the
 generator only ever emits products actually returned by the catalog.
+
+---
+
+## D7 — Orchestration framework: Mastra  ·  *added 2026-06-28*
+
+**Decision:** Build the orchestration layer (the D2 pipeline) on **Mastra** — a TS-native agent +
+workflow framework built on top of the Vercel AI SDK. The deterministic pipeline runs as Mastra
+workflow steps; agents back only the two LLM steps (classify, generate). SSE to the client uses
+`@mastra/ai-sdk` → AI SDK `useChat`. Conversation + preference storage use Mastra Memory (D4).
+
+**Why:**
+- **Studio traceability / debugging** — Mastra Studio gives visual, step-level traces of each run,
+  making the pipeline observable and easy to debug.
+- **Future-proofing** — the flow is deterministic today, but we expect to add agents for new purposes;
+  Mastra's workflow + agent + memory primitives absorb that growth without a rewrite.
+- Matches the team's stack; first-class evals serve the testing requirement (US-6.1); reuses AI SDK at
+  the UI edge so we still get best-in-class SSE streaming.
+
+**Alternatives rejected:**
+- *Vercel AI SDK direct* — lightest and simplest to fully explain; our deterministic flow wouldn't
+  strictly need a workflow engine. Rejected for the two reasons above (no Studio / no first-class
+  evals, no team-stack match) — the honest fallback if the flow stays non-agentic. Note Mastra is
+  built *on* AI SDK, so we keep its streaming either way.
+- *LangChain / LangGraph (JS)* — powerful graph + durable checkpoints, but Python-first with grafted
+  TS that trails releases, heavier, weaker serverless story.
+- *LibreChat* — a finished self-hosted chat product; wrong shape for a bespoke discovery pipeline with
+  custom cards and our own persistence.
+- *Fully custom* — maximum control, but reinvents orchestration/streaming we'd rather not own.
+
+**Model selection (unchanged):** `gpt-5.4-nano` for classify/extract, `gpt-5.4-mini` for generation.

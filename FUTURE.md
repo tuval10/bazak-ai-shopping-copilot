@@ -14,19 +14,24 @@ refer to where each item originally lived before being deferred.
   traffic — so these are low-risk for the assignment. Grounding (US-5.1) and graceful failure
   (US-5.2) stay in scope because they protect correctness/UX, not just abuse surface.
 
-## User Profile & Personalization
+## User Profile & Personalization (UI-heavy parts only)
 
-- **Optional onboarding** (was US-5.1) — skippable, per-field flow for shopping preferences (budget,
-  categories, sizes, brands) and optional demographics (age, gender, occupation, free-text note).
-- **View & edit profile anytime** (was US-5.2).
-- **Learn preferences during conversation** (was US-5.3) — infer and save preferences mentioned in
-  chat ("I'm vegan", "budget ~$50"), transparently.
-- **Personalized results** (was US-5.4) — bias retrieval/ranking by profile, with clear "why".
-- **Profile persistence** (was US-5.5) — saved across refresh and shared across all conversations.
-- **Privacy by default** (was US-6.6) — store only what's needed; user can view/edit/remove; be
-  transparent about what was remembered.
-- *Why deferred:* a sizeable feature not required by the assignment; the core discovery experience
-  stands without it.
+The cheap backend of personalization is now **in scope** via Mastra working memory (USER_STORIES
+Epic 7: learn + persist prefs, personalized replies, first-time conversational onboarding, see &
+reset). What stays deferred is the UI-heavy and retrieval-side work:
+
+- **Dedicated onboarding form** (was US-5.1) — a skippable multi-field form (budget, categories, sizes,
+  brands) plus optional demographics (age, gender, occupation, free-text note). In scope today is
+  *conversational* onboarding (US-7.3); the form UI is deferred.
+- **Full profile editor** (was US-5.2) — view *and edit* every stored field. In scope today is a
+  read-only "what's remembered" view + reset (US-7.4); per-field editing is deferred.
+- **Retrieval/ranking personalization** (was US-5.4) — fold remembered prefs into the catalog query
+  and ranking. In scope today is generation-side personalization (US-7.2); biasing retrieval is
+  deferred.
+- **Granular privacy controls** (was US-6.6) — view/edit/remove individual items and
+  transparency-by-default beyond the minimal show + reset.
+- *Why deferred:* these need real frontend or retrieval work; the high-value, low-effort slice
+  (remember + personalize) already landed via working memory.
 
 ## Analytics & Observability
 
