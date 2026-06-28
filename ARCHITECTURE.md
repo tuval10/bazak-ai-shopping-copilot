@@ -11,16 +11,16 @@ are and how they fit*; **[DECISIONS.md](DECISIONS.md)** says *why* each was chos
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│  BROWSER                                                                    │
-│  assistant-ui chat shell (D8)                                               │
-│    • thread · composer · streaming · autoscroll · edit/regenerate           │
-│    • makeAssistantToolUI("product-results") → <ProductCardGroup/>  (D6)      │
+│  BROWSER  —  own Next.js App-Router UI (D8, D11), client-side only          │
+│    • hand-built chat shell: thread · composer · streaming · autoscroll      │
+│    • <ProductResults> renders streamed product-results parts  (D6)          │
+│    • @mastra/client-js talks straight to the server (no FE backend)         │
 │  holds only the conversation id, in the URL  /c/{id}  (D5)                   │
 └──────────────▲────────────────────────────────────────┬────────────────────┘
-               │ AI SDK v5 stream (SSE):                 │ fetch:
+               │ workflow stream:                        │ client-js fetch:
                │ assistant text + product-results parts  │ create / list / load
 ┌──────────────┴────────────────────────────────────────▼────────────────────┐
-│  LOCAL SERVER  —  thin backend, Next.js route handlers  (D1, D3)            │
+│  LOCAL SERVER  —  Mastra server (built bundle, port 4111)  (D1, D7, D9)     │
 │  owns:  OpenAI key  ·  orchestration  ·  persistence                        │
 │                                                                             │
 │  ┌─ Mastra workflow  =  the D2 pipeline ───────────────────────────────┐    │
@@ -50,9 +50,10 @@ All orchestration, the OpenAI key, and all persistence live on the local server.
 
 | Layer | Component | Responsibility | ADR |
 |------|-----------|----------------|-----|
-| Front-end | **assistant-ui** | Chat shell (thread/composer/streaming/autoscroll); renders streamed `product-results` parts as product-card groups via `makeAssistantToolUI` | D8, D6 |
-| Transport | **`@mastra/ai-sdk` → AI SDK v5 stream (SSE)** | Streams assistant text + typed parts to the client | D6, D7 |
-| Host | **Next.js route handlers** | Serves the client and the JSON/streaming API; keeps the OpenAI key server-side | D1, D3 |
+| Front-end | **Own Next.js App-Router UI** | Hand-built chat shell (thread/composer/streaming/autoscroll); `<ProductResults>` renders streamed `product-results` parts as product-card groups | D8, D11, D6 |
+| Data layer | **`@mastra/client-js`** | Browser client to the Mastra endpoints (workflow stream + memory threads + `/profile`); responses validated against `@bazak/shared` | D8, D11 |
+| Transport | **Mastra workflow stream** | Streams assistant text + custom `data-product-results` parts to the client | D6, D7 |
+| Host | **Mastra server** (built bundle) | Serves the streaming + memory-thread + profile endpoints; keeps the OpenAI key server-side | D1, D9 |
 | Orchestration | **Mastra workflow** (the D2 pipeline) | Deterministic `classify → route → retrieve → generate`; agents back only the two LLM steps | D2, D7 |
 | Storage | **Mastra Memory on LibSQL** | Threads (conversation transcript) + working memory (per-user prefs) | D4 |
 | External | **OpenAI** | `gpt-5.4-nano` (classify/extract) · `gpt-5.4-mini` (generate) | D2 |
@@ -69,19 +70,21 @@ user types ──▶ POST /api/workflows/{id}/stream   { inputData: { message, t
    2. classify    ├─ gpt-5.4-nano: intent type(s), extracted attributes, multi-intent split (US-1.2/1.3)
    3. route       ├─ branch: chit-chat | off-catalog | ambiguous | product search (Epic 4)
    4. retrieve    ├─ per sub-intent: pick DummyJSON endpoint → fetch → filter/sort/paginate client-side
-   5. generate    ├─ gpt-5.4-mini: STREAM assistant text
-                  │     + emit one "product-results" part per intent (grounded only in retrieved data, US-5.1)
+   5. generate    ├─ emit one "product-results" part per intent (grounded only in retrieved data, US-5.1)
+                  │     + gpt-5.4-mini: write the assistant summary text
                   │     + update working memory if new prefs surfaced (US-7.1)
-   6. persist     ├─ Mastra Memory: append user + assistant messages to the thread
+   6. persist     ├─ Mastra Memory: append user + assistant messages to the thread;
+                  │     store the per-turn results as assistant-message metadata (D12) for resume
                   ▼
-   stream ──▶ assistant-ui: text renders inline; each product-results part → <ProductCardGroup/>
+   stream ──▶ own UI: text renders inline; each product-results part → <ProductResults> card group
 
-   on refresh ──▶ GET /api/memory/threads/{id}/messages  (id read from /c/{id}) rehydrates the thread (US-3.1)
+   on refresh ──▶ GET /api/memory/threads/{id}/messages  (id read from /c/{id}) rehydrates the thread
+                  AND the cards from the persisted results metadata (US-3.1, D12)
 ```
 
 Two LLM calls per turn (classify, generate); everything between is plain, testable code (D2). The pipeline
-— not the model — produces product results, so the generate step **writes them onto the stream as
-synthetic tool/data parts** (D6).
+— not the model — produces product results, so the generate step **writes them onto the workflow stream as
+custom data parts** (D6).
 
 ---
 
@@ -154,10 +157,13 @@ so the client filters the thread list by title.
 conversation is a **`threadId`** scoped to it. Working memory is scoped to the resource, so preferences
 persist across all of that user's conversations (US-7.1).
 
-**Streaming response** (from the messages endpoint) is an AI SDK v5 stream carrying:
-- **text parts** — the assistant's natural-language summary, rendered inline;
-- **`product-results` parts** — one per intent, each `{ intent, products: [...] }`, rendered as a
-  product-card group (D6). Multi-intent → multiple parts; single intent → one.
+**Streaming response** (from `POST /api/workflows/{id}/stream`) is a workflow stream of chunks carrying:
+- **`data-product-results` parts** — one per intent, each `{ intent, products: [...] }`, streamed via
+  `writer.custom(...)` as each intent resolves and rendered as a product-card group (D6). Multi-intent →
+  multiple parts; single intent → one.
+- **the final step output** — `{ message, results }`: the assistant's natural-language summary (rendered
+  inline) plus the aggregate results. Prose is **not** token-streamed (the generate step returns full
+  text); cards stream mid-turn, prose lands at the end.
 
 Each product carries the catalog fields the card needs: `id`, `title`, `description`, `price`,
 `discountPercentage`, `rating`, `stock`, `availabilityStatus`, `thumbnail` (US-2.1, US-1.7).
@@ -170,7 +176,8 @@ Each product carries the catalog fields the card needs: `id`, `title`, `descript
 resource (user)                      ← one, fixed, for the local app
  ├── working memory  { prefs… }       ← per-user; structured doc; survives across conversations (US-7.1)
  └── threads[]                        ← one per conversation
-      └── messages[]  { role, parts, createdAt }   ← the transcript (US-3.1)
+      └── messages[]  { role, parts, createdAt, metadata? }   ← the transcript (US-3.1);
+                                         assistant messages carry per-turn results in metadata (D12)
 ```
 
 - **threads** give conversation list / resume / search out of the box (US-3.3, US-3.4).
@@ -203,20 +210,21 @@ surfaced as a raw DB error (US-5.2).
 | Orchestration | Mastra (workflow + agents) | D2, D7 |
 | LLM | OpenAI `gpt-5.4-nano` (classify) · `gpt-5.4-mini` (generate) | D2 |
 | Storage | Mastra Memory on LibSQL (SQLite) | D4 |
-| Front-end chat | assistant-ui | D8 |
-| Transport | SSE via `@mastra/ai-sdk` → AI SDK v5 stream | D6, D7 |
+| Front-end chat | Own Next.js App-Router UI (Tailwind, hand-built) | D8, D11 |
+| Data layer | `@mastra/client-js` (browser → Mastra endpoints) | D8, D11 |
+| Transport | Mastra workflow stream (text + custom data parts) | D6, D7 |
 | Routing | URL `/c/{id}` = Mastra thread id | D5 |
-| Host framework | Next.js route handlers | D1, D3 |
+| Host | Mastra server (built bundle) + standalone Next.js client | D1, D9, D11 |
 | Catalog | DummyJSON Products API | — |
-| Validation | Zod (via Mastra / AI SDK structured output) | D2 |
+| Validation | Zod via `@bazak/shared` (server emits, client re-validates) | D2, D11 |
 | Observability | Mastra Studio + OpenTelemetry | D4, D7 |
 
 ---
 
 ## 10. Open items (not yet ADR'd)
 
-- **Host framework** — Next.js full-stack is the working assumption (natural fit for a React FE + thin
-  backend + SSE), implied by D1/D3 but not its own decision entry. A standalone Node server is the
-  alternative if we want the FE fully decoupled.
-- **Test / eval tooling** — the *what* is fixed (US-6.1: end-to-end flow + Epic 4 edge cases, on a
-  per-turn log); the concrete runner (Mastra evals + a test framework) is still to be pinned down.
+- *(resolved)* **Host framework** — settled: a standalone **Mastra server** (built bundle) owns the API,
+  and the frontend is a **separate client-only Next.js app** on `@mastra/client-js` (D8, D9, D11). The two
+  are fully decoupled; there is no FE backend.
+- *(resolved)* **Test / eval tooling** — Vitest on `shared`/`server` (D10), Jest + RTL on `frontend`
+  (D11); Epic 4 edge cases run as server evals.

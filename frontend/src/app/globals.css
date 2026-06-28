@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Typing-dot stagger + skeleton shimmer, mirrored from the UX mocks. The keyframes
+   themselves live in tailwind.config.ts; these helpers add the per-dot delay and the
+   shimmer overlay that can't be expressed as single utility classes. */
+@layer components {
+  .dot {
+    @apply animate-typing;
+  }
+  .dot:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .dot:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: #e2e8f0;
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+    @apply animate-shimmer;
+  }
+}

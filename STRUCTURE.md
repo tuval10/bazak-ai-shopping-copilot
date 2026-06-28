@@ -4,7 +4,7 @@ The repository is a workspace of three packages, each with its own test suite:
 
 - **`shared/`** — types + Zod schemas that are the contract between the other two.
 - **`server/`** — the Mastra orchestration pipeline, catalog client, persistence, and HTTP/streaming API.
-- **`frontend/`** — the assistant-ui chat app.
+- **`frontend/`** — our own Next.js chat app on `@mastra/client-js` (no chat framework).
 
 This implies a **decoupled** topology: a standalone Mastra/Node **server** and a separate **frontend**
 app (resolving the standalone-server alternative noted in [ARCHITECTURE.md](ARCHITECTURE.md) §10, rather
@@ -15,7 +15,7 @@ than a single Next.js full-stack host). See [ARCHITECTURE.md](ARCHITECTURE.md) f
 bazak-ai-shopping-copilot/
 ├── shared/        # contract: types + Zod schemas (consumed by server + frontend)
 ├── server/        # Mastra pipeline · catalog client · Mastra Memory · API
-├── frontend/      # assistant-ui chat app
+├── frontend/      # own Next.js chat app on @mastra/client-js
 ├── package.json   # workspace root (npm/pnpm workspaces)
 └── *.md           # ARCHITECTURE / DECISIONS / USER_STORIES / FUTURE / STRUCTURE / README
 ```
@@ -112,59 +112,72 @@ server/
 
 ---
 
-## `frontend/` — assistant-ui chat app
+## `frontend/` — own Next.js chat app
 
-Renders what it's streamed; holds only the conversation id in the URL (`/c/{id}`, D5). Cards render via
-an assistant-ui tool UI bound to the `product-results` parts (D6, D8).
+Our own chat UI (Next.js App Router, client-side only, Tailwind), built from `UX/mocks/*.html`. Renders
+what it's streamed; holds only the conversation id in the URL (`/c/{id}`, D5). The data layer is
+`@mastra/client-js` straight to the Mastra endpoints (D8, D11); a small `runTurn` stream parser turns the
+workflow stream into `{ groups, text }`, and our `<ProductResults>` renders the `data-product-results`
+parts as card groups (D6) — no chat framework, no runtime adapter.
 
 ```
 frontend/
 ├── src/
-│   ├── app/                    # routes
+│   ├── app/                    # routes (App Router, client components)
+│   │   ├── layout.tsx          # root layout (Tailwind, fonts)
 │   │   ├── page.tsx            # conversations list (home)               US-3.3
 │   │   └── c/[id]/page.tsx     # a conversation; rehydrates by id        US-3.1, D5
 │   ├── components/
 │   │   ├── chat/
-│   │   │   ├── Thread.tsx      # assistant-ui thread + streaming
-│   │   │   └── Composer.tsx    # input
+│   │   │   ├── UserMessage.tsx        # right-aligned user bubble         US-1.1
+│   │   │   ├── BotMessage.tsx         # summary / decline / chitchat / error+Retry   US-4.x/5.2
+│   │   │   ├── Loading.tsx            # typing dots + status + skeletons
+│   │   │   └── Composer.tsx           # input + send
 │   │   ├── products/
-│   │   │   ├── ProductResultsUI.tsx  # makeAssistantToolUI("product-results")  D6/D8
-│   │   │   ├── ProductCardGroup.tsx  # one group per intent
-│   │   │   └── ProductCard.tsx       # title · description · price · image      US-2.1
+│   │   │   ├── ProductResults.tsx     # all groups + "Showing X of Y / Show more"  D6
+│   │   │   ├── ProductCardGroup.tsx   # one labelled group per intent     US-1.3
+│   │   │   ├── ProductCard.tsx        # title · desc · price · image · stock · deal  US-2.1/1.7
+│   │   │   └── NoResults.tsx          # names the relaxed constraint      US-4.4
 │   │   ├── conversations/
-│   │   │   ├── ConversationList.tsx  # list + search                    US-3.3/3.4
-│   │   │   └── NewConversation.tsx   #                                  US-3.2
-│   │   ├── profile/
-│   │   │   └── RememberedPrefs.tsx    # read-only view + reset           US-7.4
-│   │   └── states/
-│   │       ├── Loading.tsx
-│   │       └── NoResults.tsx         #                                  US-4.4
-│   ├── runtime/
-│   │   └── mastra-runtime.ts   # assistant-ui ↔ Mastra/AI-SDK runtime adapter  D8
+│   │   │   ├── Sidebar.tsx            # logo + new + list + search        US-3.2/3.3/3.4
+│   │   │   └── ConversationRow.tsx    # title · preview · relative time
+│   │   └── profile/
+│   │       └── RememberedPrefs.tsx    # read-only view + reset            US-7.4
+│   ├── hooks/
+│   │   └── useConversation.ts  # load history · optimistic send · progressive stream · retry
 │   ├── api-client/
-│   │   └── conversations.ts    # fetch wrappers to the server API (§6)
+│   │   ├── conversations.ts    # list/create/get/delete/messages → shared shapes (§6)
+│   │   └── turn.ts             # runTurn(): async-iterate the workflow stream → { groups, text }
 │   └── lib/
-│       └── format.ts           # price/availability formatting
-├── tests/                      # Jest + React Testing Library — UI ONLY, all mocked
+│       ├── mastra-client.ts    # configured MastraClient (base URL, resourceId)   D8/D11
+│       └── format.ts           # price · derived sale price · relative time · stock label
+├── tests/                      # Jest + React Testing Library — all mocked, no backend
+│   ├── unit/                   # the pure FE logic (highest-value)
+│   │   ├── turn.test.ts        #   canned stream chunks → asserted groups + text
+│   │   ├── messages.test.ts    #   Mastra message → ChatMessage (+ results rehydrate)
+│   │   └── format.test.ts      #   price / sale price / relative time / stock label
 │   ├── components/
 │   │   ├── ProductCard.test.tsx
-│   │   ├── ProductCardGroup.test.tsx
-│   │   ├── ConversationList.test.tsx
+│   │   ├── ProductResults.test.tsx
+│   │   ├── Sidebar.test.tsx
 │   │   └── RememberedPrefs.test.tsx
 │   ├── mocks/
 │   │   ├── product-results.ts  # mock stream parts / products (from shared schemas)
-│   │   ├── conversations.ts     # mock list + history
-│   │   └── server.ts            # mock API client (no real backend)
+│   │   └── client.ts           # mock MastraClient (no real backend)
 │   └── setup.ts                # jsdom + testing-library setup
 ├── jest.config.ts
+├── next.config.ts
+├── tailwind.config.ts
 ├── package.json
 └── tsconfig.json
 ```
 
-**Testing:** **Jest + React Testing Library, UI only.** Components are tested in isolation against
-**mocked** data (mock `product-results` parts, mock conversation list, mock API client) — no real server,
-no real model, no network. Verifies rendering and interaction: a card shows title/price/image, a group
-renders per-intent, the list filters on search, the prefs view shows + resets.
+**Testing:** **Jest + React Testing Library.** Two halves: **unit tests for the pure logic** — the
+`runTurn` stream parser (canned chunks → per-intent groups + final text), the Mastra-message→`ChatMessage`
+mapper, and the `format` helpers — and **component tests** against **mocked** data (mock `product-results`
+parts, mock `MastraClient`). No real server, model, or network. Verifies a card shows title/price/image
+and derived sale price, a group renders per-intent, the list filters on search, the prefs view shows +
+resets.
 
 ---
 
@@ -174,7 +187,7 @@ renders per-intent, the list filters on search, the prefs view shows + resets.
 |---------|---------|-------|-----------|
 | `shared/` | unit | schema parse / reject / defaults | none |
 | `server/` | unit · integration · evals | code seams · full pipeline · Epic 4 edge cases (US-6.1) | OpenAI + DummyJSON **mocked** |
-| `frontend/` | Jest + RTL | UI render + interaction | everything **mocked** (no backend) |
+| `frontend/` | Jest + RTL | stream-parser / mapper / format units · UI render + interaction | everything **mocked** (no backend) |
 
 The shared schemas are the seam: the server validates outgoing parts against them, the frontend mocks and
 renders against the same shapes, so the two can't drift.

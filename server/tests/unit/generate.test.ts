@@ -4,7 +4,7 @@ import {
   PRODUCT_RESULTS_PART,
   type PartWriter,
   type TextGenerator,
-  buildGeneratePrompt,
+  buildGroundingSystem,
   runGenerate,
   summarizeForPrompt,
 } from "../../src/pipeline/generate";
@@ -27,7 +27,7 @@ const textAgent = (text = "Here you go!"): TextGenerator => ({
   generate: vi.fn(async () => ({ text })),
 });
 
-describe("summarizeForPrompt / buildGeneratePrompt", () => {
+describe("summarizeForPrompt / buildGroundingSystem", () => {
   it("instructs a brief redirect for chitchat", () => {
     expect(summarizeForPrompt({ kind: "chitchat", results: [], notes: [] })).toMatch(/small talk/i);
   });
@@ -45,7 +45,12 @@ describe("summarizeForPrompt / buildGeneratePrompt", () => {
     const summary = summarizeForPrompt(state);
     expect(summary).toContain("Acme Buds ($80)");
     expect(summary).toContain("Relaxed something.");
-    expect(buildGeneratePrompt(input.message, state)).toContain(input.message);
+    // The grounding system message carries the retrieved data + a reply instruction,
+    // but NOT the user message (that's persisted separately as the user turn).
+    const grounding = buildGroundingSystem(state);
+    expect(grounding).toContain("Acme Buds ($80)");
+    expect(grounding).toMatch(/reply/i);
+    expect(grounding).not.toContain(input.message);
   });
 });
 
@@ -70,10 +75,14 @@ describe("runGenerate", () => {
     // grounding: the returned results are exactly the retrieved ones (model can't add)
     expect(out.results).toEqual(state.results);
     expect(out.message).toBe("Found these for you.");
-    // memory context is threaded into the agent call
+    // The real user message is what's sent (and thus persisted, US-3.1); the grounding
+    // rides along as a non-persisted system message; memory context is threaded in.
     expect(agent.generate).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ memory: { thread: "thread-1", resource: "local-user" } }),
+      input.message,
+      expect.objectContaining({
+        memory: { thread: "thread-1", resource: "local-user" },
+        system: expect.stringContaining("phone"),
+      }),
     );
   });
 

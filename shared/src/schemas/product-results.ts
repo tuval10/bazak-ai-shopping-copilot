@@ -12,3 +12,13 @@ export const productResultsPartSchema = z.object({
 });
 
 export type ProductResultsPart = z.infer<typeof productResultsPartSchema>;
+
+/**
+ * Wire constants shared by server and frontend (the anti-drift seam, D11):
+ * - `PRODUCT_RESULTS_PART_TYPE` — the `type` discriminator on the streamed data part
+ *   the generate step writes via `writer.custom(...)` and the FE reads off the stream (D6).
+ * - `RESULTS_METADATA_KEY` — the `content.metadata` key under which a turn's results are
+ *   persisted on the assistant message so history rehydrates the cards (D12).
+ */
+export const PRODUCT_RESULTS_PART_TYPE = "data-product-results";
+export const RESULTS_METADATA_KEY = "productResults";

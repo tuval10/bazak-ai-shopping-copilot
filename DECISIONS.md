@@ -121,8 +121,9 @@ conversations.
 **Decision:** The server still produces per-intent product results — one entry per intent, each with its
 own `products` array (multi-intent → multiple entries; single intent → one). **Amendment:** rather than
 returning them as one custom JSON response body, the generate step **streams them as typed parts on the
-AI SDK stream** alongside the assistant text — one `product-results` part per intent. assistant-ui (D8)
-renders each part with a registered **tool UI** (`makeAssistantToolUI`) as a product-card group (US-2.1).
+workflow stream** alongside the assistant text — one `product-results` part per intent (emitted via
+`writer.custom({ type: "data-product-results", data })`). Our own `ProductResults` component (D8) renders
+each part as a product-card group (US-2.1).
 
 Content per part is unchanged; only the envelope is now an AI-SDK-native part rather than a field in one
 JSON blob:
@@ -136,20 +137,19 @@ JSON blob:
 > **Supersedes** the original D6 (a single JSON body: `{ message, results: [...] }` rendered by a custom
 > client renderer). Same content, AI-SDK-native envelope.
 
-**Why amended:** with assistant-ui as the FE chat layer (D8), the idiomatic "generative UI" path is
-*typed stream parts → a component registered per part type*. Streaming results as parts (instead of one
-end-of-turn JSON body) lets cards render **as each intent resolves**, plugs straight into assistant-ui
-with a single `makeAssistantToolUI` registration, and keeps the assistant text and the card groups in
-one ordered message. Because the **D2 pipeline (not the model) produces the results**, the generate step
-**writes these as synthetic tool/data parts** onto the stream — the model never "decides" to call a tool.
+**Why amended:** streaming results as typed parts (instead of one end-of-turn JSON body) lets cards render
+**as each intent resolves** and keeps the assistant text and the card groups in one ordered turn. Because
+the **D2 pipeline (not the model) produces the results**, the generate step **writes these as custom data
+parts** onto the workflow stream — the model never "decides" to call a tool. The frontend (D8) reads the
+`data-product-results` parts off the stream and renders each as a card group.
 
 **Why (unchanged):** server shapes data, client owns presentation (US-2.1); multi-intent (US-1.3) falls
 out naturally as multiple parts. Grounding (US-5.1) stays server-enforced — only products actually
 returned by the catalog are ever emitted.
 
 **Alternatives rejected:**
-- *Single custom JSON response body* (the original D6 shape) — simplest, but bypasses assistant-ui's
-  part-based rendering, forces a bespoke message renderer, and can't stream cards per intent.
+- *Single custom JSON response body* (the original D6 shape) — simplest, but can't stream cards per intent
+  as each resolves; the part-based envelope gives progressive rendering for little extra cost.
 
 ---
 
@@ -184,30 +184,41 @@ use Mastra Memory (D4).
 
 ---
 
-## D8 — Front-end chat layer: assistant-ui  ·  *added 2026-06-28*
+## D8 — Front-end chat layer: own UI on `@mastra/client-js`  ·  *reversed 2026-06-28*
 
-**Decision:** Build the chat UI on **assistant-ui** — a prebuilt, accessible React chat shell (thread,
-composer, streaming, autoscroll, edit/regenerate) with a first-class **Mastra runtime adapter**. It
-consumes the same AI SDK v5 stream Mastra emits via `@mastra/ai-sdk` (D7), so it sits *on top of* the
-`useChat` transport rather than replacing it. Custom **product cards render as assistant-ui tool UIs**
-(`makeAssistantToolUI`) bound to the streamed `product-results` parts (D6).
+**Decision:** Build our **own** small, accessible chat UI (Next.js App Router, hand-built components from
+`UX/mocks/*.html`, Tailwind) talking to the existing Mastra endpoints through the official browser client
+**`@mastra/client-js`**. No chat framework. Product cards are rendered by our own `ProductResults`
+component from the streamed `product-results` parts (D6); the rest of the shell (message list, composer,
+autoscroll, loading/error states, a11y) is bespoke.
 
-**Why:**
-- **Less plumbing** — the prebuilt shell removes the generic chat work (message list, composer,
-  autoscroll, streaming states, accessibility), so effort goes into the bespoke part: the product-card
-  groups.
-- **Native fit** — first-class Mastra adapter + AI-SDK-native parts means per-intent card rendering (D6)
-  is a single `makeAssistantToolUI` registration, not custom glue. The only seam is server-side: the
-  generate step writes results as synthetic tool/data parts (the pipeline, not the model, produces them).
+> **Reverses** the original D8 (assistant-ui). The reversal is deliberate — see *Why changed*.
+
+**Why changed (honesty note):** the original D8 assumed assistant-ui would drop in via a "first-class
+Mastra adapter." Researching the *current* assistant-ui ⇄ Mastra story showed our backend is off
+assistant-ui's documented path:
+- Every official assistant-ui ⇄ Mastra integration assumes a Mastra **agent** stream (`@mastra/ai-sdk`
+  `chatRoute`), **not a workflow stream** — and our front door is the D2 **workflow** (`/api/workflows/
+  pipeline/stream`). Bridging would mean adding an agent-shaped conversion route purely to satisfy the UI.
+- `makeAssistantToolUI` — the exact API D6/D8 leaned on to render cards — is **deprecated** (superseded by
+  a toolkit API + a backend-pushed data-UI path), so the "single registration" advantage evaporated.
+- Our cards are a **server-produced data part**, not a model tool-call; forcing them through a tool-UI is
+  conceptually wrong and would need undocumented glue.
+
+Net: adopting assistant-ui meant using a framework off-label, adding a conversion route, and wiring an
+undocumented data path — *more* plumbing than it removes. A small owned UI on the official client is
+simpler, fully understood, and matches the assignment's "a simpler solution you can defend." The generic
+chat shell we'd have delegated is modest; the bespoke/interesting part (the product-card groups) is
+hand-built either way.
+
+**Why (unchanged):** keeps the thin client (D1) and the decoupled topology — a backendless Next.js app
+talking straight to Mastra's endpoints; presentation stays fully ours (US-2.1).
 
 **Alternatives rejected:**
-- *Hand-built components on `useChat`* — most transparent and maximum control, and the path the
-  assignment's "simpler solution you fully understand" slightly favors. Rejected because we'd hand-build
-  the generic chat shell; the custom/interesting part (cards) is bespoke either way, so the shell is the
-  cheap thing to delegate to a library. Close call — chosen against for build speed + UX polish.
-- *CopilotKit* — built to bolt a copilot **onto an existing app** (in-app actions, shared app state,
-  sidebar assistant that drives your UI); heavier and the wrong shape for a chat-first app. Mastra-
-  compatible, so it's a fit mismatch, not a compatibility one.
+- *assistant-ui* (the original choice) — prebuilt shell + autoscroll/streaming for free, but assumes an
+  agent stream, its card-rendering API is deprecated, and our results are data not tool-calls; the
+  integration cost exceeded the shell it would have saved.
+- *CopilotKit* — built to bolt a copilot **onto an existing app**; wrong shape for a chat-first app.
 
 ---
 
@@ -264,3 +275,48 @@ would need ts-jest/babel glue and fights the ESM modules.
 **Alternatives rejected:**
 - *Jest everywhere* (FE consistency) — extra ESM/TS config and friction with Mastra's modules; the
   packages are independent, so a per-package runner choice costs nothing.
+
+---
+
+## D11 — Frontend shape: own Next.js App-Router app, client-side only  ·  *added 2026-06-28*
+
+**Decision:** The frontend is a **Next.js App Router** app rendered client-side with **no FE backend** —
+every data call goes from the browser straight to the Mastra server via `@mastra/client-js` (D8). Routes:
+`/` = conversations list, `/c/{id}` = a conversation (`{id}` is the Mastra thread id, D5). Styling is
+**Tailwind** with the mocks' `bazak` palette (`#6366f1 / #4f46e5 / #eef2ff`); components are hand-built
+from `UX/mocks/*.html`. All server responses are validated against `@bazak/shared` Zod schemas — the same
+contract the server emits — so drift between the two surfaces is caught at the seam. Tests: **Jest + RTL**
+for components plus Jest unit tests for the pure stream-parser / mappers / format helpers (D10).
+
+**Why:** matches D1 (thin client) and D8 (own UI on the official client). No Next.js API routes / server
+components doing data work means one less place state can live — the server owns persistence (D3), the
+browser holds only the conversation id in the URL (D5). The shared-schema seam keeps FE and BE honest
+without a generated client.
+
+**Alternatives rejected:**
+- *Next.js with server-side data fetching (RSC / route handlers)* — would re-introduce a FE backend that
+  just proxies Mastra, duplicating D9's endpoints. Client-only keeps the topology flat.
+- *Vite SPA* — fine and lighter, but Next's App Router gives routing/layouts out of the box and is the
+  team-standard React stack.
+
+---
+
+## D12 — Per-turn results persisted for resume fidelity  ·  *added 2026-06-28*
+
+**Decision:** Persist each assistant turn's **product results** (the per-intent groups) alongside the
+assistant message in the thread, as message **metadata**, so loading history (`GET /api/memory/threads/
+{id}/messages`) rehydrates the **cards**, not just the prose. On a turn, results stream live as
+`data-product-results` parts (D6); on refresh/resume they come back from the persisted metadata.
+
+**Why:** US-3.1 (resume on refresh) requires the conversation to come back *as it was*. The streamed parts
+are ephemeral — without persisting them, a resumed conversation would replay the assistant text with the
+product cards missing, which reads as broken. Storing the already-computed, already-grounded results (no
+re-retrieval, no second model call) is the cheap, faithful fix.
+
+**Why metadata (not a re-query):** the results are deterministic given the turn, but re-running retrieval
+on history load would be slower, could drift if the catalog changed, and wastes calls. Persisting the
+exact groups that were shown is both faithful and free at read time.
+
+**Alternatives rejected:**
+- *Re-retrieve on history load* — avoids storing anything, but is slower, can drift, and re-does work.
+- *Don't persist (prose only)* — simplest, but loses cards on resume and undercuts US-3.1.

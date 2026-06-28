@@ -24,6 +24,14 @@ export const mastra = new Mastra({
   },
   server: {
     apiRoutes: profileRoutes,
+    // Allow the standalone frontend (a separate origin, e.g. localhost:3000) to call
+    // the API from the browser (D11 — the FE is client-only, no proxy). Local single
+    // user, so a permissive origin is fine; expose nothing sensitive.
+    cors: {
+      origin: "*",
+      allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+      allowHeaders: ["Content-Type"],
+    },
     // Skip OpenAPI/Swagger doc generation: it converts every registered schema to
     // JSON Schema at boot via zod's v4 converter, which throws on some schema
     // shapes (non-representable optional). The functional endpoints don't need it.

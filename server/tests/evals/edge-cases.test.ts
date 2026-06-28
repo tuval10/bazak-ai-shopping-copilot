@@ -104,12 +104,28 @@ describe("Epic 4 edge cases", () => {
 
   it("follow-up → memory context is carried into generation (US-4.5, mechanism)", async () => {
     // The generator receives thread+resource memory, so replies are context-aware.
-    // NOTE: classifier-level refinement resolution ("cheaper", "the second one")
-    // re-querying against prior turns is not yet implemented — see commit/FUTURE.
     const { gen } = await run({ kind: "product", searches: [{ label: "p", keywords: "p" }] });
     expect(gen.generate).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ memory: { thread: "t", resource: "local-user" } }),
     );
+  });
+
+  it("follow-up → classifier resolves refinements against prior turns (US-4.5)", async () => {
+    // With prior-turn context, the classify step rewrites an implicit refinement
+    // ("show me cheaper") into a full search. Assert the classifier prompt now carries
+    // BOTH the current message and the recent conversation.
+    const classifier = fakeClassifier({
+      kind: "product",
+      searches: [{ label: "cheaper headphones", keywords: "headphones", sort: { field: "price", order: "asc" } }],
+    });
+    const prior = "user: wireless headphones under $100\nassistant: Here are some budget picks.";
+
+    const classification = await runClassify("show me cheaper", classifier, prior);
+
+    expect(classification.kind).toBe("product");
+    const [prompt] = (classifier.generate as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
+    expect(prompt).toContain("show me cheaper");
+    expect(prompt).toContain("wireless headphones under $100");
   });
 });
