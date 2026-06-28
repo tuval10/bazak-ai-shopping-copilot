@@ -24,12 +24,5 @@ export const mastra = new Mastra({
   },
   server: {
     apiRoutes: profileRoutes,
-    // Skip OpenAPI/Swagger doc generation: it converts every registered schema to
-    // JSON Schema at boot via zod's v4 converter, which throws on some schema
-    // shapes (non-representable optional). The functional endpoints don't need it.
-    build: {
-      openAPIDocs: false,
-      swaggerUI: false,
-    },
   },
 });

@@ -231,12 +231,16 @@ working memory (US-7.4) — there is no built-in working-memory HTTP route. The 
 it. **Conversation search (US-3.4) is client-side** (filter the thread list by title) — there is no
 built-in thread text-search endpoint.
 
-**Running the server (Studio caveat):** run with `npm start` (`mastra build` → `node
-.mastra/output/index.mjs`), **not** `mastra dev`. On the pinned versions (`@mastra/core` 1.47 + zod
-3.25.76), `mastra dev`'s Studio playground crashes generating OpenAPI from schemas (a known upstream
-`toJSONSchema` "non-representable optional" issue, mastra#16383/#17655). The production server boots
-fine with `openAPIDocs`/`swaggerUI` disabled and serves every endpoint. Working memory uses a markdown
-**template** (not a Zod schema) to keep that conversion out of the runtime path too.
+**Running the server:** `npm run dev` (`mastra dev`, with Studio) for development, or `npm start`
+(`mastra build` → `node .mastra/output/index.mjs`) for a production-style run. Both work and serve every
+endpoint.
+
+> **Gotcha (resolved):** a single workspace package must not end up with its own `node_modules/zod` at a
+> different major than the hoisted root — `require.resolve("zod")` prefers the package-local copy, so
+> Mastra would load that zod's `toJSONSchema` and crash Studio at boot with "non-representable optional".
+> Keep zod deduped to one version across the workspace (a clean `npm install` does this). The DB path is
+> resolved to an absolute path at the package root (env.ts) because `mastra build` runs from
+> `.mastra/output`, where a relative `./data` wouldn't exist.
 
 **Why:** we already committed to Mastra (D7) for orchestration *and* persistence (D4); its generated
 endpoints cover the turn + the entire thread lifecycle, so a parallel hand-rolled REST layer would be
