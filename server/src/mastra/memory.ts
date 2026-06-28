@@ -1,19 +1,6 @@
+import { profileSchema } from "@bazak/shared";
 import { LibSQLStore } from "@mastra/libsql";
 import { Memory } from "@mastra/memory";
-
-/**
- * Working-memory template (US-7.x). A markdown template (rather than a Zod schema)
- * keeps Mastra's boot-time JSON-schema conversion out of the picture and reads
- * back as the human-friendly text the profile route surfaces (US-7.4).
- */
-const WORKING_MEMORY_TEMPLATE = `# User Preferences
-- Name:
-- Budget:
-- Preferred categories:
-- Preferred brands:
-- Dislikes:
-- Notes:
-`;
 
 /**
  * Conversation + preference store (DECISIONS D4): Mastra Memory on LibSQL.
@@ -33,7 +20,7 @@ export function createMemory(url: string): Memory {
       workingMemory: {
         enabled: true,
         scope: "resource",
-        template: WORKING_MEMORY_TEMPLATE,
+        schema: profileSchema,
       },
       semanticRecall: false,
       lastMessages: 10,

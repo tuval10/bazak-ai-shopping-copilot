@@ -148,7 +148,7 @@ the working-memory gap. The client never calls OpenAI or DummyJSON directly.
 | `DELETE /profile` *(custom route, D9a)* | Reset / clear remembered preferences | US-7.4 |
 
 > Custom routes can't live under `/api` (reserved by Mastra), so the profile route is `/profile`. Run the
-> server with `npm start` (build + run), not `mastra dev` — see DECISIONS D9a "Studio caveat".
+> server with `npm run dev` (Mastra Studio) or `npm start` (build + run) — both serve every endpoint.
 
 **Conversation search (US-3.4)** is **client-side** — there is no built-in thread text-search endpoint,
 so the client filters the thread list by title.

@@ -40,18 +40,20 @@ OPENAI_API_KEY=sk-...
 
 ### Run (two terminals)
 ```bash
-# 1) the Mastra server — builds the bundle, then serves on http://localhost:4111
+# 1) the Mastra server on http://localhost:4111 — `npm start` builds the bundle and
+#    serves it; `npm run dev --workspace=@bazak/server` (mastra dev, with Studio) also works.
 npm start --workspace=@bazak/server
 
 # 2) the frontend — Next.js dev server on http://localhost:3000
 npm run dev --workspace=@bazak/frontend
 ```
 Open <http://localhost:3000>. The frontend talks to the server at `http://localhost:4111` by default;
-override with `NEXT_PUBLIC_MASTRA_URL`.
+override with `NEXT_PUBLIC_MASTRA_URL`. CORS is enabled on the server so the browser app can call it
+cross-origin (D11).
 
-> **Why `npm start`, not `mastra dev`:** on the pinned versions, the Studio playground crashes generating
-> OpenAPI from schemas. The production server (`mastra build` → `node .mastra/output/index.mjs`) boots fine
-> with OpenAPI/Swagger disabled and serves every endpoint. See DECISIONS D9a.
+> **Note:** keep zod deduped to one version across the workspace — a workspace package with its own
+> `node_modules/zod` at a different major crashes Mastra Studio at boot (a clean `npm install` dedupes it).
+> See DECISIONS D9a.
 
 ### Test
 ```bash
