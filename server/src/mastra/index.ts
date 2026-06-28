@@ -1,5 +1,6 @@
 import { Mastra } from "@mastra/core";
 import { LibSQLStore } from "@mastra/libsql";
+import { pipelineWorkflow } from "../pipeline/workflow";
 import { loadEnv } from "../config/env";
 import { createClassifierAgent } from "./agents/classifier";
 import { createGeneratorAgent } from "./agents/generator";
@@ -20,5 +21,8 @@ export const mastra = new Mastra({
   agents: {
     classifier: createClassifierAgent(),
     generator: createGeneratorAgent(memory),
+  },
+  workflows: {
+    pipeline: pipelineWorkflow,
   },
 });
