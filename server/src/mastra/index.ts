@@ -1,28 +1,35 @@
 import { Mastra } from "@mastra/core";
-import { LibSQLStore } from "@mastra/libsql";
+import { profileRoutes } from "../api/profile";
 import { pipelineWorkflow } from "../pipeline/workflow";
-import { loadEnv } from "../config/env";
 import { createClassifierAgent } from "./agents/classifier";
 import { createGeneratorAgent } from "./agents/generator";
-import { createMemory } from "./memory";
+import { memory, storage } from "./store";
 
-const env = loadEnv();
-
-/** Shared conversation + preference store (D4). */
-export const memory = createMemory(env.databaseUrl);
+export { memory };
 
 /**
- * The Mastra instance. Registering the agents + storage brings up Mastra's
- * built-in endpoints (D9) — `/api/memory/threads…` for conversations. The
- * pipeline workflow is registered here in Phase 4.
+ * The Mastra instance. Registering the agents + storage + workflow brings up
+ * Mastra's built-in endpoints (D9): `/api/memory/threads…` for conversations and
+ * `/api/workflows/pipeline/stream` for a turn. The custom profile route (D9a) is
+ * added under `server.apiRoutes`.
  */
 export const mastra = new Mastra({
-  storage: new LibSQLStore({ id: "bazak-storage", url: env.databaseUrl }),
+  storage,
   agents: {
     classifier: createClassifierAgent(),
     generator: createGeneratorAgent(memory),
   },
   workflows: {
     pipeline: pipelineWorkflow,
+  },
+  server: {
+    apiRoutes: profileRoutes,
+    // Skip OpenAPI/Swagger doc generation: it converts every registered schema to
+    // JSON Schema at boot via zod's v4 converter, which throws on some schema
+    // shapes (non-representable optional). The functional endpoints don't need it.
+    build: {
+      openAPIDocs: false,
+      swaggerUI: false,
+    },
   },
 });

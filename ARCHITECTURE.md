@@ -136,13 +136,16 @@ the working-memory gap. The client never calls OpenAI or DummyJSON directly.
 | Method & path | Purpose | Stories |
 |---------------|---------|---------|
 | `POST /api/workflows/{id}/stream` | Run a turn: the pipeline workflow, **streaming** assistant text + `product-results` parts. `inputData: { message, threadId, resourceId }` | US-1.x, US-4.x, US-7.x |
-| `POST /api/memory/threads` | Create a conversation (thread) | US-3.2 |
-| `GET /api/memory/threads` | List conversations (by `resourceId`) | US-3.3 |
+| `POST /api/memory/threads?agentId=generator` | Create a conversation (thread) — thread ops are scoped to an agent's memory | US-3.2 |
+| `GET /api/memory/threads?resourceId=…` | List conversations (by `resourceId`) | US-3.3 |
 | `GET /api/memory/threads/{id}` | Thread metadata (resume) | US-3.3 |
 | `GET /api/memory/threads/{id}/messages` | Full message history (rehydrate on refresh) | US-3.1 |
 | `DELETE /api/memory/threads/{id}` | Delete a conversation | — |
-| `GET /api/profile` *(custom route, D9a)* | Read-only view of remembered preferences (working memory) | US-7.4 |
-| `DELETE /api/profile` *(custom route, D9a)* | Reset / clear remembered preferences | US-7.4 |
+| `GET /profile` *(custom route, D9a)* | Read-only view of remembered preferences (working memory) | US-7.4 |
+| `DELETE /profile` *(custom route, D9a)* | Reset / clear remembered preferences | US-7.4 |
+
+> Custom routes can't live under `/api` (reserved by Mastra), so the profile route is `/profile`. Run the
+> server with `npm start` (build + run), not `mastra dev` — see DECISIONS D9a "Studio caveat".
 
 **Conversation search (US-3.4)** is **client-side** — there is no built-in thread text-search endpoint,
 so the client filters the thread list by title.

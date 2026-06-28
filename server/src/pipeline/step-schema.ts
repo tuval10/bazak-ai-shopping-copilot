@@ -1,17 +1,18 @@
-import type { z } from "zod";
+import { z } from "zod";
 
 /**
- * Mastra's `createStep`/`createWorkflow` generics infer step IO from the Zod
- * schema *types*. Our schemas nest deeply enough (Product → results → workflow
- * output) that the inference hits TS2589 ("excessively deep").
+ * Mastra declares workflow/step IO with Zod schemas and, at boot, converts them
+ * to JSON Schema (for Studio/OpenAPI) using zod's v4 converter. Our nested
+ * schemas (Product → results, optionals/defaults) both (a) explode TS inference
+ * (TS2589) and (b) hit "non-representable optional" in that converter.
  *
- * `looseSchema` returns the schema unchanged at runtime (so Mastra still
- * validates against the real schema) but types it as `any`, which severs the
- * compile-time inference. The real, fully-typed contracts live in the `run*`
- * core functions, which are unit tested directly; the step `execute` bodies
- * re-parse their input with the real schema to recover typed locals.
+ * `looseSchema` sidesteps both: the step/workflow declares `z.any()` (trivially
+ * convertible, no validation/stripping, so data flows between steps intact),
+ * while the real, fully-typed contracts live in the `run*` core functions and
+ * each step `execute` re-parses its input with the real schema. The schema arg
+ * is kept only to document intent at the call site.
  */
 // biome-ignore lint/suspicious/noExplicitAny: intentional — see doc comment.
-export function looseSchema(schema: z.ZodType): any {
-  return schema;
+export function looseSchema(_schema: z.ZodType): any {
+  return z.any();
 }

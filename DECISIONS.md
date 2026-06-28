@@ -225,9 +225,18 @@ memory thread endpoints. Exactly **one** custom route is added (D9a) for the wor
 | Conversation history (refresh) | `GET /api/memory/threads/{id}/messages` | US-3.1 |
 | Delete a conversation | `DELETE /api/memory/threads/{id}` | — |
 
-**D9a — one custom route (`registerApiRoute`):** `GET`/`DELETE /api/profile` reads and resets per-user
-working memory (US-7.4) — there is no built-in working-memory HTTP route. **Conversation search (US-3.4)
-is client-side** (filter the thread list by title) — there is no built-in thread text-search endpoint.
+**D9a — one custom route (`registerApiRoute`):** `GET`/`DELETE /profile` reads and resets per-user
+working memory (US-7.4) — there is no built-in working-memory HTTP route. The path is `/profile`, **not**
+`/api/profile`: Mastra reserves the `/api` prefix for its built-in routes and rejects custom routes under
+it. **Conversation search (US-3.4) is client-side** (filter the thread list by title) — there is no
+built-in thread text-search endpoint.
+
+**Running the server (Studio caveat):** run with `npm start` (`mastra build` → `node
+.mastra/output/index.mjs`), **not** `mastra dev`. On the pinned versions (`@mastra/core` 1.47 + zod
+3.25.76), `mastra dev`'s Studio playground crashes generating OpenAPI from schemas (a known upstream
+`toJSONSchema` "non-representable optional" issue, mastra#16383/#17655). The production server boots
+fine with `openAPIDocs`/`swaggerUI` disabled and serves every endpoint. Working memory uses a markdown
+**template** (not a Zod schema) to keep that conversion out of the runtime path too.
 
 **Why:** we already committed to Mastra (D7) for orchestration *and* persistence (D4); its generated
 endpoints cover the turn + the entire thread lifecycle, so a parallel hand-rolled REST layer would be

@@ -148,3 +148,6 @@ server/data/*.db-*
 .mastra/
 *.sqlite
 .DS_Store
+
+# Mastra build/runtime artifacts in src
+server/src/mastra/public/

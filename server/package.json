@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "mastra build",
+    "start": "mastra build && node .mastra/output/index.mjs",
     "dev": "mastra dev",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
@@ -17,7 +19,7 @@
     "@mastra/libsql": "^1.14.2",
     "@mastra/memory": "^1.21.2",
     "ai": "^7.0.4",
-    "zod": "^4.4.3"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
