@@ -40,6 +40,9 @@ non-determinism is boxed into two well-defined spots, and it's straightforward t
 
 ## D3 — Server owns conversation persistence
 
+> **Note (2026-06-28):** the *principle* below stands, but the concrete **endpoint table is superseded
+> by D9** — the client now uses Mastra's built-in endpoints, not a custom `/api/conversations…` REST API.
+
 **Decision:** The server owns all conversation state. The client holds only the current
 `conversationId` and sends `{ conversationId, message }` per turn. On refresh, the client re-fetches
 the conversation from the server by id.
@@ -205,3 +208,50 @@ consumes the same AI SDK v5 stream Mastra emits via `@mastra/ai-sdk` (D7), so it
 - *CopilotKit* — built to bolt a copilot **onto an existing app** (in-app actions, shared app state,
   sidebar assistant that drives your UI); heavier and the wrong shape for a chat-first app. Mastra-
   compatible, so it's a fit mismatch, not a compatibility one.
+
+---
+
+## D9 — API exposure: Mastra's built-in endpoints (not a custom REST API)  ·  *added 2026-06-28*
+
+**Decision:** The client talks to **Mastra's built-in HTTP endpoints** rather than a hand-rolled REST
+API. A turn runs through the workflow stream endpoint; conversation list/resume/history come from the
+memory thread endpoints. Exactly **one** custom route is added (D9a) for the working-memory gap.
+
+| Need | Endpoint | Story |
+|------|----------|-------|
+| Run a turn (pipeline) → stream text + `product-results` parts | `POST /api/workflows/{id}/stream` (`inputData: { message, threadId, resourceId }`) | US-1.x, US-4.x, US-7.x |
+| New conversation | `POST /api/memory/threads` | US-3.2 |
+| List / resume conversations | `GET /api/memory/threads` · `GET /api/memory/threads/{id}` | US-3.3 |
+| Conversation history (refresh) | `GET /api/memory/threads/{id}/messages` | US-3.1 |
+| Delete a conversation | `DELETE /api/memory/threads/{id}` | — |
+
+**D9a — one custom route (`registerApiRoute`):** `GET`/`DELETE /api/profile` reads and resets per-user
+working memory (US-7.4) — there is no built-in working-memory HTTP route. **Conversation search (US-3.4)
+is client-side** (filter the thread list by title) — there is no built-in thread text-search endpoint.
+
+**Why:** we already committed to Mastra (D7) for orchestration *and* persistence (D4); its generated
+endpoints cover the turn + the entire thread lifecycle, so a parallel hand-rolled REST layer would be
+duplicate code wrapping the same calls. Less surface to build, test, and keep in sync.
+
+**Supersedes** the custom `POST/GET /api/conversations…` endpoint table in **D3** and **ARCHITECTURE §6**.
+D3's underlying principle — *the server owns persistence; the client holds only the conversation id* —
+**still stands**; only the concrete endpoints change (they're now Mastra's, not ours).
+
+**Alternatives rejected:**
+- *Custom REST API over Mastra Memory* (the original D3 table) — clean, fully our-designed contract, but
+  redundant: every handler would just forward to a Mastra call. Kept only the one route Mastra doesn't provide.
+
+---
+
+## D10 — Backend test runner: Vitest  ·  *added 2026-06-28*
+
+**Decision:** `shared/` and `server/` use **Vitest**. The frontend keeps **Jest** (its own package,
+STRUCTURE.md).
+
+**Why:** native ESM/TS with no extra transform config, fast, and aligned with Mastra/AI-SDK's ESM stack
+and AI SDK's `MockLanguageModelV2` test double (used to mock the model in pipeline tests). Jest on the BE
+would need ts-jest/babel glue and fights the ESM modules.
+
+**Alternatives rejected:**
+- *Jest everywhere* (FE consistency) — extra ESM/TS config and friction with Mastra's modules; the
+  packages are independent, so a per-package runner choice costs nothing.

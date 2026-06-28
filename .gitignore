@@ -141,3 +141,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Bazak — backend runtime
+server/data/*.db
+server/data/*.db-*
+.mastra/
+*.sqlite
+.DS_Store
