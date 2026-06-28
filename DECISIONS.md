@@ -113,25 +113,40 @@ conversations.
 
 ---
 
-## D6 — Structured response payload; client renders product arrays
+## D6 — Structured product results as streamed, typed parts  ·  *amended 2026-06-28*
 
-**Decision:** The server returns structured JSON: an assistant `message` plus a `results` array where
-each entry is one intent with its own `products` array. Multi-intent → multiple arrays; single intent
-→ one. The client renders each entry as a product-card group.
+**Decision:** The server still produces per-intent product results — one entry per intent, each with its
+own `products` array (multi-intent → multiple entries; single intent → one). **Amendment:** rather than
+returning them as one custom JSON response body, the generate step **streams them as typed parts on the
+AI SDK stream** alongside the assistant text — one `product-results` part per intent. assistant-ui (D8)
+renders each part with a registered **tool UI** (`makeAssistantToolUI`) as a product-card group (US-2.1).
+
+Content per part is unchanged; only the envelope is now an AI-SDK-native part rather than a field in one
+JSON blob:
 
 ```jsonc
-{
-  "message": "Here's what I found…",
-  "results": [
-    { "intent": "phone under $500", "products": [ {…}, {…} ] },
-    { "intent": "laptop bag",       "products": [ {…} ] }
-  ]
-}
+// each streamed as its own typed "product-results" part, not a single response body:
+{ "intent": "phone under $500", "products": [ {…}, {…} ] }
+{ "intent": "laptop bag",       "products": [ {…} ] }
 ```
 
-**Why:** Clean separation — the server shapes data, the client owns presentation (US-2.1); multi-intent
-(US-1.3) falls out naturally as multiple arrays. Grounding (US-5.1) is enforced server-side: the
-generator only ever emits products actually returned by the catalog.
+> **Supersedes** the original D6 (a single JSON body: `{ message, results: [...] }` rendered by a custom
+> client renderer). Same content, AI-SDK-native envelope.
+
+**Why amended:** with assistant-ui as the FE chat layer (D8), the idiomatic "generative UI" path is
+*typed stream parts → a component registered per part type*. Streaming results as parts (instead of one
+end-of-turn JSON body) lets cards render **as each intent resolves**, plugs straight into assistant-ui
+with a single `makeAssistantToolUI` registration, and keeps the assistant text and the card groups in
+one ordered message. Because the **D2 pipeline (not the model) produces the results**, the generate step
+**writes these as synthetic tool/data parts** onto the stream — the model never "decides" to call a tool.
+
+**Why (unchanged):** server shapes data, client owns presentation (US-2.1); multi-intent (US-1.3) falls
+out naturally as multiple parts. Grounding (US-5.1) stays server-enforced — only products actually
+returned by the catalog are ever emitted.
+
+**Alternatives rejected:**
+- *Single custom JSON response body* (the original D6 shape) — simplest, but bypasses assistant-ui's
+  part-based rendering, forces a bespoke message renderer, and can't stream cards per intent.
 
 ---
 
@@ -140,7 +155,8 @@ generator only ever emits products actually returned by the catalog.
 **Decision:** Build the orchestration layer (the D2 pipeline) on **Mastra** — a TS-native agent +
 workflow framework built on top of the Vercel AI SDK. The deterministic pipeline runs as Mastra
 workflow steps; agents back only the two LLM steps (classify, generate). SSE to the client uses
-`@mastra/ai-sdk` → AI SDK `useChat`. Conversation + preference storage use Mastra Memory (D4).
+`@mastra/ai-sdk` → AI SDK v5 streams, consumed by assistant-ui (D8). Conversation + preference storage
+use Mastra Memory (D4).
 
 **Why:**
 - **Studio traceability / debugging** — Mastra Studio gives visual, step-level traces of each run,
@@ -162,3 +178,30 @@ workflow steps; agents back only the two LLM steps (classify, generate). SSE to 
 - *Fully custom* — maximum control, but reinvents orchestration/streaming we'd rather not own.
 
 **Model selection (unchanged):** `gpt-5.4-nano` for classify/extract, `gpt-5.4-mini` for generation.
+
+---
+
+## D8 — Front-end chat layer: assistant-ui  ·  *added 2026-06-28*
+
+**Decision:** Build the chat UI on **assistant-ui** — a prebuilt, accessible React chat shell (thread,
+composer, streaming, autoscroll, edit/regenerate) with a first-class **Mastra runtime adapter**. It
+consumes the same AI SDK v5 stream Mastra emits via `@mastra/ai-sdk` (D7), so it sits *on top of* the
+`useChat` transport rather than replacing it. Custom **product cards render as assistant-ui tool UIs**
+(`makeAssistantToolUI`) bound to the streamed `product-results` parts (D6).
+
+**Why:**
+- **Less plumbing** — the prebuilt shell removes the generic chat work (message list, composer,
+  autoscroll, streaming states, accessibility), so effort goes into the bespoke part: the product-card
+  groups.
+- **Native fit** — first-class Mastra adapter + AI-SDK-native parts means per-intent card rendering (D6)
+  is a single `makeAssistantToolUI` registration, not custom glue. The only seam is server-side: the
+  generate step writes results as synthetic tool/data parts (the pipeline, not the model, produces them).
+
+**Alternatives rejected:**
+- *Hand-built components on `useChat`* — most transparent and maximum control, and the path the
+  assignment's "simpler solution you fully understand" slightly favors. Rejected because we'd hand-build
+  the generic chat shell; the custom/interesting part (cards) is bespoke either way, so the shell is the
+  cheap thing to delegate to a library. Close call — chosen against for build speed + UX polish.
+- *CopilotKit* — built to bolt a copilot **onto an existing app** (in-app actions, shared app state,
+  sidebar assistant that drives your UI); heavier and the wrong shape for a chat-first app. Mastra-
+  compatible, so it's a fit mismatch, not a compatibility one.
