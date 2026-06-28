@@ -57,6 +57,16 @@ analytics program is deferred:
 - *Note:* a basic loading/typing indicator is the minimum worth keeping for UX even if the rest is
   deferred.
 
+## Classifier-Level Follow-up Resolution (partial today)
+
+- **What works now (US-4.5 mechanism):** the generator agent holds conversation memory (thread + working
+  memory), so replies are context-aware.
+- **What's deferred:** the *classifier* doesn't yet see prior turns, so an implicit refinement
+  ("show me cheaper", "the second one") isn't resolved into a new retrieval against the previous query.
+  Completing this means feeding recent thread messages (read-only) into the classify step so it can
+  rewrite the follow-up into a full search. Deferred to keep the classify step a single, stateless LLM
+  call for now.
+
 ## LLM-Assisted Input & Follow-ups
 
 - **Query autocomplete** — as the user types, use the LLM to predict and complete the request inline
