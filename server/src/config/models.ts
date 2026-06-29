@@ -27,3 +27,10 @@ export const GENERATOR_MODEL: MastraModelConfig = "openai/gpt-5.4-mini";
  */
 export const SUPERVISOR_MODEL: MastraModelConfig = "openai/gpt-5.4-mini";
 export const DISCOVERY_MODEL: MastraModelConfig = "openai/gpt-5.4-mini";
+
+/**
+ * Suggestion chips → the small/fast NANO model: phrasing 2-3 tappable follow-up
+ * shopping prompts from the turn's products is a light task, and chips are best-effort
+ * UX with a deterministic fallback, so the cheap model is the right trade.
+ */
+export const CHIPS_MODEL: MastraModelConfig = "openai/gpt-5.4-nano";

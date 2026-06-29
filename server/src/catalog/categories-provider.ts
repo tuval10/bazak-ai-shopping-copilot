@@ -40,7 +40,7 @@ export interface CategoriesProviderOptions {
 /**
  * Process-wide in-memory cache for the catalog category list — slugs, names, and
  * per-category product counts (US-1.6). The list is tiny (~24 entries) and changes
- * rarely, but it is now read on EVERY turn (the orchestrator and finder both see it),
+ * rarely, but it is now read on EVERY turn (the supervisor and finder both see it),
  * so we fetch + enrich it at most once per day (two calls behind the cache:
  * `/products/categories` + one `/products?limit=0&select=category` count).
  *

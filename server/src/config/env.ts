@@ -12,7 +12,7 @@ export interface ServerEnv {
   /** LibSQL connection string — an absolute file URL by default, `:memory:` in tests. */
   databaseUrl: string;
   /**
-   * Max Product Discovery finders the orchestrator may spawn per turn (the LLM may
+   * Max Product Discovery finders the supervisor may spawn per turn (the LLM may
    * propose more; only this many run). Caps the per-turn fan-out.
    */
   maxProductFinders: number;

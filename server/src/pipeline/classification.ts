@@ -60,27 +60,6 @@ export const searchIntentSchema = z.object({
 export type SearchIntent = z.infer<typeof searchIntentSchema>;
 
 /**
- * The orchestrator's structured output (agentic flow). `kind` routes the turn;
- * `finders` is one search per angle the orchestrator decided to pursue — multi-
- * intent ("phone + bag") and off-catalog merchandising ("flight" → travel pillow,
- * luggage) both produce several. Capped to MAX_PRODUCT_FINDERS downstream.
- */
-export const orchestrationPlanSchema = z.object({
-  kind: z.enum(["product", "chitchat", "off_catalog"]),
-  finders: z.array(searchIntentSchema).default([]),
-  /**
-   * True when the user only asked for MORE of the previous results ("show me
-   * more", "next", "others"). The app then reuses the prior turn's finder and
-   * pages forward (excluding already-shown products) instead of re-planning — so
-   * the orchestrator need not (and must not) re-extract constraints (US "show me
-   * more"). Optional/absent means false; we only branch on truthiness.
-   */
-  continuation: z.boolean().optional(),
-});
-
-export type OrchestrationPlan = z.infer<typeof orchestrationPlanSchema>;
-
-/**
  * Thread-metadata key under which a turn's finders are persisted (alongside the
  * results). A follow-up "show me more" reuses the exact prior finder from here
  * rather than trusting the model to re-derive (or re-invent) constraints.

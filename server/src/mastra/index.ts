@@ -2,6 +2,7 @@ import { Mastra } from "@mastra/core";
 import { profileRoutes } from "../api/profile";
 import { logger } from "../observability/logger";
 import { pipelineWorkflow } from "../pipeline/workflow";
+import { createChipsAgent } from "./agents/chips";
 import { createDiscoveryAgent } from "./agents/discovery";
 import { createSupervisorAgent } from "./agents/supervisor";
 import { memory, storage } from "./store";
@@ -24,6 +25,8 @@ export const mastra = new Mastra({
     // are registered as real agents → visible in Mastra Studio traces.
     supervisor: createSupervisorAgent(memory),
     discovery: createDiscoveryAgent(),
+    // Stateless helper: phrases the turn's context-aware suggestion chips (cheap nano).
+    chips: createChipsAgent(),
   },
   workflows: {
     pipeline: pipelineWorkflow,

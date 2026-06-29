@@ -48,8 +48,8 @@ function normalize(s: string): string {
  * per category (the count is appended only when known, so a count-less list still
  * renders cleanly). Empty string when there are none, so the caller can omit the
  * block. Slug-first because agents must copy the SLUG verbatim — `resolveCategorySlug`
- * matches on exact slug first, and the finder/orchestrator emit slugs, not names.
- * The count lets the orchestrator judge how thin a category is (e.g. broaden a
+ * matches on exact slug first, and the finder/supervisor emit slugs, not names.
+ * The count lets the supervisor judge how thin a category is (e.g. broaden a
  * finder when a category holds only a couple of items).
  */
 export function formatCategoryList(categories: Category[]): string {
