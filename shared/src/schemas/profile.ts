@@ -14,7 +14,12 @@ export const profileSchema = z.object({
   preferredCategories: z.array(z.string()).optional(),
   preferredBrands: z.array(z.string()).optional(),
   dislikes: z.array(z.string()).optional(),
-  notes: z.string().optional(),
+  notes: z
+    .string()
+    .optional()
+    .describe(
+      "Durable, generalizable preferences only (e.g. 'prefers minimalist design'). Never the current query, what they're shopping for now, or a conversation summary.",
+    ),
 });
 
 export type Profile = z.infer<typeof profileSchema>;

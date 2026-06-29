@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { productResultsPartSchema } from "./product-results";
+import { suggestionChipSchema } from "./suggested-chips";
 
 /**
  * Input to the pipeline workflow — the body of `POST /api/workflows/{id}/stream`
@@ -23,6 +24,7 @@ export type WorkflowInput = z.infer<typeof workflowInputSchema>;
 export const workflowOutputSchema = z.object({
   message: z.string(),
   results: z.array(productResultsPartSchema),
+  chips: z.array(suggestionChipSchema).default([]),
 });
 
 export type WorkflowOutput = z.infer<typeof workflowOutputSchema>;

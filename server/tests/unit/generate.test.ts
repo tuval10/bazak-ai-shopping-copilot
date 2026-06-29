@@ -69,9 +69,9 @@ describe("runGenerate", () => {
 
     const out = await runGenerate({ input, state, agent, writer });
 
-    // one custom part per intent, with the agreed part type
-    expect(parts).toHaveLength(2);
-    expect(parts.every((p) => p.type === PRODUCT_RESULTS_PART)).toBe(true);
+    // one product-results part per intent (a suggestion-chips part may also ride along)
+    const productParts = parts.filter((p) => p.type === PRODUCT_RESULTS_PART);
+    expect(productParts).toHaveLength(2);
     // grounding: the returned results are exactly the retrieved ones (model can't add)
     expect(out.results).toEqual(state.results);
     expect(out.message).toBe("Found these for you.");

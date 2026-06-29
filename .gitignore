@@ -151,3 +151,6 @@ server/data/*.db-*
 
 # Mastra build/runtime artifacts in src
 server/src/mastra/public/
+
+# Local Claude Code agent config / worktrees (not part of the project)
+.claude/

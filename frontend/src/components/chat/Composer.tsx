@@ -4,17 +4,32 @@ import { type FormEvent, useState } from "react";
 
 const PLACEHOLDER = "Ask for anything — e.g. 'show me cheaper' or 'the second one in red'";
 
-/** The message input. Submits on Enter or the send button; clears on send. */
+/**
+ * The message input. Submits on Enter or the send button; clears on send.
+ *
+ * Uncontrolled by default. Pass `value`/`onValueChange` to control it externally —
+ * a suggestion chip prefills the draft this way (the user can edit before sending).
+ */
 export function Composer({
   onSend,
   disabled = false,
   placeholder = PLACEHOLDER,
+  value: controlledValue,
+  onValueChange,
 }: {
   onSend: (message: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  value?: string;
+  onValueChange?: (value: string) => void;
 }) {
-  const [value, setValue] = useState("");
+  const [internalValue, setInternalValue] = useState("");
+  const isControlled = controlledValue !== undefined;
+  const value = isControlled ? controlledValue : internalValue;
+  const setValue = (v: string) => {
+    if (isControlled) onValueChange?.(v);
+    else setInternalValue(v);
+  };
 
   function submit(e: FormEvent) {
     e.preventDefault();

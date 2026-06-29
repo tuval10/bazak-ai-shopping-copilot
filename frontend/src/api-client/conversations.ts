@@ -1,17 +1,21 @@
 import {
   type ChatMessage,
+  CHIPS_METADATA_KEY,
   type ConversationSummary,
   type ProductResultsPart,
   RESULTS_METADATA_KEY,
   chatMessageSchema,
   conversationSummarySchema,
   productResultsPartSchema,
+  type SuggestionChip,
+  suggestionChipSchema,
 } from "@bazak/shared";
 import { AGENT_ID, type MastraClient, RESOURCE_ID, mastraClient } from "@/lib/mastra-client";
 
-/** A chat message plus the product groups to re-render for an assistant turn (D12). */
+/** A chat message plus the product groups + chips to re-render for an assistant turn (D12). */
 export interface UiMessage extends ChatMessage {
   results?: ProductResultsPart[];
+  chips?: SuggestionChip[];
 }
 
 /** Structural view of a stored thread (Mastra `StorageThreadType`) — only the fields we map. */
@@ -65,6 +69,14 @@ function extractResults(content: RawMessage["content"]): ProductResultsPart[] | 
   return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
 }
 
+/** Pull persisted suggestion chips off an assistant message's metadata, validated (D12). */
+function extractChips(content: RawMessage["content"]): SuggestionChip[] | undefined {
+  if (typeof content === "string") return undefined;
+  const raw = content.metadata?.[CHIPS_METADATA_KEY];
+  const parsed = suggestionChipSchema.array().safeParse(raw);
+  return parsed.success && parsed.data.length > 0 ? parsed.data : undefined;
+}
+
 /** Pure mapper: a stored thread → the list/summary shape (exported for unit tests). */
 export function toConversationSummary(thread: RawThread): ConversationSummary {
   const createdAt = toIso(thread.createdAt);
@@ -92,7 +104,12 @@ export function toUiMessages(raw: RawMessage[]): UiMessage[] {
     });
     if (!base.success) continue;
     const results = m.role === "assistant" ? extractResults(m.content) : undefined;
-    out.push(results ? { ...base.data, results } : base.data);
+    const chips = m.role === "assistant" ? extractChips(m.content) : undefined;
+    out.push({
+      ...base.data,
+      ...(results ? { results } : {}),
+      ...(chips ? { chips } : {}),
+    });
   }
   return out;
 }

@@ -1,8 +1,11 @@
 import { Mastra } from "@mastra/core";
 import { profileRoutes } from "../api/profile";
+import { logger } from "../observability/logger";
 import { pipelineWorkflow } from "../pipeline/workflow";
-import { createClassifierAgent } from "./agents/classifier";
+import { createConciergeAgent } from "./agents/concierge";
+import { createDiscoveryAgent } from "./agents/discovery";
 import { createGeneratorAgent } from "./agents/generator";
+import { createOrchestratorAgent } from "./agents/orchestrator";
 import { memory, storage } from "./store";
 
 export { memory };
@@ -15,8 +18,14 @@ export { memory };
  */
 export const mastra = new Mastra({
   storage,
+  logger,
   agents: {
-    classifier: createClassifierAgent(),
+    // Agentic roster (orchestrator + sub-agents). The generator holds Memory so it
+    // persists the transcript (US-3.1) + learns preferences (US-7.1); the others are
+    // stateless. All are registered as real agents → visible in Mastra Studio traces.
+    orchestrator: createOrchestratorAgent(),
+    discovery: createDiscoveryAgent(),
+    concierge: createConciergeAgent(memory),
     generator: createGeneratorAgent(memory),
   },
   workflows: {

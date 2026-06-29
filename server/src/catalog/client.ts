@@ -4,6 +4,7 @@ import {
   productListResponseSchema,
   productSchema,
 } from "@bazak/shared";
+import { logger } from "../observability/logger";
 import { type Category, categoryListSchema } from "./categories";
 
 const BASE_URL = "https://dummyjson.com";
@@ -32,7 +33,14 @@ function buildUrl(path: string, query: Record<string, string | number | undefine
   return url.toString();
 }
 
+// Sequence id so concurrent catalog calls are correlatable in the log (LOG_LEVEL=debug).
+let callSeq = 0;
+
 async function fetchJson(url: string): Promise<unknown> {
+  const id = ++callSeq;
+  const path = url.replace(BASE_URL, "");
+  const startedAt = performance.now();
+  logger.debug(`catalog →#${id} GET ${path}`, { component: "catalog", call: id, path, phase: "start" });
   let res: Response;
   try {
     res = await fetch(url);
@@ -42,7 +50,15 @@ async function fetchJson(url: string): Promise<unknown> {
   if (!res.ok) {
     throw new CatalogError(`Catalog returned ${res.status} for ${url}`, res.status);
   }
-  return res.json();
+  const json = await res.json();
+  logger.debug(`catalog ←#${id} GET ${path}`, {
+    component: "catalog",
+    call: id,
+    path,
+    phase: "end",
+    durationMs: Math.round(performance.now() - startedAt),
+  });
+  return json;
 }
 
 /** `/products/search?q=` — keyword/free-text search (US-1.1). */

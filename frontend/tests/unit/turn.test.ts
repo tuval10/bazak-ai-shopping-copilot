@@ -1,4 +1,4 @@
-import { PRODUCT_RESULTS_PART_TYPE } from "@bazak/shared";
+import { PRODUCT_RESULTS_PART_TYPE, SUGGESTED_CHIPS_PART_TYPE } from "@bazak/shared";
 import { type RawTurnChunk, type TurnState, parseTurnStream } from "@/api-client/turn";
 import { mockGroup } from "../mocks/product-results";
 
@@ -35,6 +35,19 @@ describe("parseTurnStream", () => {
     expect(streaming).toHaveLength(2);
     expect(streaming[0]!.groups).toHaveLength(1);
     expect(streaming[0]!.text).toBe("");
+  });
+
+  it("parses a suggestion-chips part and carries chips through to the final state", async () => {
+    const chips = [{ label: "Under $50", message: "only under $50" }];
+    const states = await collect([
+      { type: PRODUCT_RESULTS_PART_TYPE, data: phones },
+      { type: SUGGESTED_CHIPS_PART_TYPE, data: { chips } },
+      { type: "workflow-step-result", payload: { output: { message: "ok", results: [phones], chips } } },
+    ]);
+    // chips appear progressively...
+    expect(states.some((s) => s.status === "streaming" && s.chips.length === 1)).toBe(true);
+    // ...and on the authoritative final state.
+    expect(states.at(-1)!.chips).toEqual(chips);
   });
 
   it("reads the data part whether it sits under data, payload.data, or payload", async () => {
