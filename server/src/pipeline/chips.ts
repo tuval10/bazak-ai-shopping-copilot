@@ -58,6 +58,52 @@ function fallbackFollowUp(state: RetrieveState): SuggestionChip[] {
   ];
 }
 
+/** A compact, grounded summary of what we showed, so model chips reference REAL options. */
+function productContext(products: Product[]): string {
+  const prices = products.map((p) => p.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const brands = [...new Set(products.map((p) => p.brand).filter((b): b is string => Boolean(b)))];
+  const cats = [...new Set(products.map((p) => p.category).filter((c): c is string => Boolean(c)))];
+  const titles = products.slice(0, 5).map((p) => p.title);
+  return [
+    `Category: ${cats.join(", ") || "various"}.`,
+    `Price range: $${min}–$${max}.`,
+    brands.length ? `Brands present: ${brands.slice(0, 5).join(", ")}.` : "",
+    `Examples: ${titles.join("; ")}.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Model-authored, context-aware chips grounded in the products we just showed — the
+ * enticing "Best camera quality" / "Under $200" refinements. Empty on failure so the
+ * caller can drop to the deterministic, data-grounded filter chips.
+ */
+async function refinementChips(
+  message: string,
+  products: Product[],
+  agent: StructuredChips,
+): Promise<SuggestionChip[]> {
+  const prompt = [
+    `The shopper said: "${message}".`,
+    `We just showed them these products. ${productContext(products)}`,
+    "Write up to 3 tappable follow-up chips that would tempt them to keep shopping —",
+    "use the real price range, features they may want next, or a brand present.",
+  ].join("\n");
+  try {
+    const res = await agent.generate(prompt, {
+      structuredOutput: { schema: suggestedChipsPartSchema },
+    });
+    const parsed = suggestedChipsPartSchema.safeParse(res.object);
+    if (parsed.success && parsed.data.chips.length > 0) return parsed.data.chips.slice(0, 4);
+  } catch {
+    // fall through to deterministic chips
+  }
+  return [];
+}
+
 /** Model-authored, context-aware follow-up chips with a deterministic fallback. */
 async function followUpChips(
   message: string,
@@ -89,10 +135,12 @@ async function followUpChips(
 }
 
 /**
- * Build a turn's suggestion chips (US: autofill the next message). Abundant results
- * → deterministic filter chips with data-grounded options. Weak/empty/off-catalog
- * → context-aware follow-up chips (model-authored, deterministic fallback). Pure
- * chit-chat gets none. Never throws — chips are best-effort UX.
+ * Build a turn's suggestion chips (US: autofill the next message). When we showed
+ * products, prefer MODEL-authored, context-aware refinements grounded in those products
+ * ("Best camera quality", "Under $200"), falling back to deterministic, data-grounded
+ * filter chips if the model is absent or fails — never the generic "Show similar". No
+ * products (empty / off-catalog) → context-aware follow-up chips. Pure chit-chat gets
+ * none. Never throws — chips are best-effort UX.
  */
 export async function generateChips(args: {
   state: RetrieveState;
@@ -103,9 +151,12 @@ export async function generateChips(args: {
   if (state.kind === "chitchat") return [];
 
   const products = state.results.flatMap((r) => r.products);
-  const relaxed = state.results.some((r) => r.relaxed);
-  const abundant =
-    state.kind === "product" && !relaxed && state.results.length > 0 && products.length >= 3;
+  if (products.length === 0) return followUpChips(message, state, agent);
 
-  return abundant ? filterChips(products) : followUpChips(message, state, agent);
+  // We have products: enticing model chips first, deterministic grounded chips as fallback.
+  if (agent) {
+    const refined = await refinementChips(message, products, agent);
+    if (refined.length > 0) return refined;
+  }
+  return filterChips(products);
 }

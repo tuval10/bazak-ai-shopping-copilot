@@ -267,6 +267,7 @@ export const converseStep = createStep({
     const input = workflowInputSchema.parse(inputData);
     const supervisor = mastra.getAgent("supervisor") as unknown as SupervisorAgent;
     const finderAgent = mastra.getAgent("discovery") as unknown as AgenticFinder;
+    const chipsAgent = mastra.getAgent("chips") as unknown as StructuredChips;
     const env = loadEnv();
     const categories = await categoriesProvider.get();
     const context = await loadThreadContext(mastra, input.threadId, input.resourceId);
@@ -278,6 +279,7 @@ export const converseStep = createStep({
       categories,
       context,
       writer,
+      chipsAgent,
       maxFinders: env.maxProductFinders,
       finderMaxSteps: env.finderMaxSteps,
       supervisorMaxSteps: env.supervisorMaxSteps,
