@@ -6,8 +6,8 @@ import { MastraClient } from "@mastra/client-js";
  */
 export const RESOURCE_ID = "local-user";
 
-/** The agent thread/delete ops are scoped to (the generator owns conversation memory). */
-export const AGENT_ID = "generator";
+/** The agent thread/delete ops are scoped to (the supervisor owns conversation memory, D15). */
+export const AGENT_ID = "supervisor";
 
 /** The pipeline workflow id (the front door for a turn, D9). */
 export const PIPELINE_WORKFLOW_ID = "pipeline";

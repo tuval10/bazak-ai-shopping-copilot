@@ -1,4 +1,4 @@
-import { type ProductResultsPart, PRODUCT_RESULTS_PART_TYPE } from "@bazak/shared";
+import { type Product, type ProductResultsPart, PRODUCT_RESULTS_PART_TYPE } from "@bazak/shared";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { type Category } from "../../catalog";
@@ -71,6 +71,11 @@ export interface FindProductsToolOptions {
   exclude: Set<number>;
   /** Every grounded group this turn produced, in order — the turn's authoritative results. */
   accumulator: ProductResultsPart[];
+  /**
+   * Full product records by id — grown as groups land so the recommend_product /
+   * compare_products tools can ground a follow-up by id. Optional (tests omit it).
+   */
+  registry?: Map<number, Product>;
   /** The finders actually run this turn — persisted so a later "show me more" can reuse them. */
   usedFinders: FindProductsInput[];
   /** Run-local finder-call counter — hard-caps actual finder runs at `maxFinders`. */
@@ -153,7 +158,10 @@ export async function runFindProducts(
   for (const group of groups) {
     await opts.writer?.custom({ type: PRODUCT_RESULTS_PART_TYPE, data: group });
     opts.accumulator.push(group);
-    for (const p of group.products) opts.exclude.add(p.id);
+    for (const p of group.products) {
+      opts.exclude.add(p.id);
+      opts.registry?.set(p.id, p);
+    }
   }
 
   const found = groups.reduce((n, g) => n + g.products.length, 0);

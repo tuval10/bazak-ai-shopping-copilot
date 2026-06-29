@@ -11,6 +11,14 @@ import type {
   FindProductsInput,
   FindProductsOutput,
 } from "../../src/mastra/tools/find-products";
+import type {
+  RecommendProductInput,
+  RecommendProductOutput,
+} from "../../src/mastra/tools/recommend-product";
+import type {
+  CompareProductsInput,
+  CompareProductsOutput,
+} from "../../src/mastra/tools/compare-products";
 
 /** A search call against the run's `product_search` tool (populates the grounding registry). */
 export type ScriptedSearch = (input: ProductSearchInput) => Promise<ProductSearchOutput>;
@@ -78,6 +86,45 @@ export function scriptedSupervisor(
       };
       const find: ScriptedFind = (input) => tool.execute(input, {});
       return { text: await script(find, message) };
+    }),
+  };
+}
+
+/** A call against the run's `recommend_product` tool (spotlights one shown product). */
+export type ScriptedRecommend = (input: RecommendProductInput) => Promise<RecommendProductOutput>;
+
+/** A call against the run's `compare_products` tool (lays two shown products side by side). */
+export type ScriptedCompare = (input: CompareProductsInput) => Promise<CompareProductsOutput>;
+
+/** The run's three injected tools, bound for a scripted supervisor. */
+export interface ScriptedTools {
+  find: ScriptedFind;
+  recommend: ScriptedRecommend;
+  compare: ScriptedCompare;
+}
+
+/**
+ * Like `scriptedSupervisor`, but the script gets ALL three run tools (find_products,
+ * recommend_product, compare_products) bound to the real injected tools — so a test can
+ * exercise the spotlight/comparison paths through `runConverse` (grounding registry,
+ * streaming, accumulation) exactly as in production.
+ */
+export function scriptedSupervisorTools(
+  script: (tools: ScriptedTools, message: string) => Promise<string>,
+): SupervisorAgent {
+  return {
+    generate: vi.fn(async (message, options) => {
+      const cat = options.toolsets?.catalog ?? {};
+      const bind = <I, O>(name: string) => {
+        const tool = cat[name] as { execute: (input: I, ctx?: unknown) => Promise<O> };
+        return (input: I) => tool.execute(input, {});
+      };
+      const tools: ScriptedTools = {
+        find: bind<FindProductsInput, FindProductsOutput>("find_products"),
+        recommend: bind<RecommendProductInput, RecommendProductOutput>("recommend_product"),
+        compare: bind<CompareProductsInput, CompareProductsOutput>("compare_products"),
+      };
+      return { text: await script(tools, message) };
     }),
   };
 }

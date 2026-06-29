@@ -1,4 +1,5 @@
 import {
+  type Product,
   type ProductResultsPart,
   RESULTS_METADATA_KEY,
   type SuggestionChip,
@@ -10,7 +11,9 @@ import type { Mastra } from "@mastra/core";
 import { createStep } from "@mastra/core/workflows";
 import { categoriesProvider, type Category, formatCategoryList } from "../catalog";
 import { loadEnv } from "../config/env";
+import { createCompareProductsTool } from "../mastra/tools/compare-products";
 import { createFindProductsTool, type FindProductsInput } from "../mastra/tools/find-products";
+import { createRecommendProductTool } from "../mastra/tools/recommend-product";
 import { logger } from "../observability/logger";
 import { generateChips, type StructuredChips } from "./chips";
 import { type SearchIntent } from "./classification";
@@ -56,6 +59,13 @@ export interface ThreadContext {
   shownIds: number[];
   /** The most recent turn's shown products — lets the supervisor answer "which do you recommend?". */
   priorProducts: LeanShown[];
+  /**
+   * Full product records by id for every product shown in this thread — the grounding
+   * source for recommend_product / compare_products on a follow-up (the `priorProducts`
+   * block above is lean and lacks image/stock/discount the spotlight cards need).
+   * Optional: a turn's own find_products results also feed the registry.
+   */
+  registry?: Map<number, Product>;
 }
 
 /**
@@ -137,18 +147,38 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
   const counter = { count: 0 };
   const stepCounter = { count: 0 };
   const exclude = new Set<number>(params.context.shownIds);
+  // Seed the grounding registry with prior turns' full products; find_products grows it
+  // as new groups land, so recommend/compare can ground any shown id by full record.
+  const registry = new Map<number, Product>(params.context.registry);
 
-  const tool = createFindProductsTool({
+  const findTool = createFindProductsTool({
     writer: params.writer,
     deps,
     categories: params.categories,
     finderAgent: params.finderAgent,
     exclude,
     accumulator,
+    registry,
     usedFinders,
     counter,
     maxFinders: params.maxFinders,
     finderMaxSteps: params.finderMaxSteps,
+    stepCounter,
+    maxSteps: params.supervisorMaxSteps,
+  });
+
+  const recommendTool = createRecommendProductTool({
+    writer: params.writer,
+    registry,
+    accumulator,
+    stepCounter,
+    maxSteps: params.supervisorMaxSteps,
+  });
+
+  const compareTool = createCompareProductsTool({
+    writer: params.writer,
+    registry,
+    accumulator,
     stepCounter,
     maxSteps: params.supervisorMaxSteps,
   });
@@ -161,7 +191,13 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
   trace(`turn START "${params.input.message}"`, { shown: params.context.shownIds.length });
   const { text } = await params.supervisor.generate(params.input.message, {
     ...(system ? { system } : {}),
-    toolsets: { catalog: { find_products: tool } },
+    toolsets: {
+      catalog: {
+        find_products: findTool,
+        recommend_product: recommendTool,
+        compare_products: compareTool,
+      },
+    },
     maxSteps: params.supervisorMaxSteps,
     memory: { thread: params.input.threadId, resource: params.input.resourceId },
   });
@@ -186,12 +222,13 @@ export async function loadThreadContext(
   threadId: string,
   resourceId: string,
 ): Promise<ThreadContext> {
-  const empty: ThreadContext = { shownIds: [], priorProducts: [] };
+  const empty: ThreadContext = { shownIds: [], priorProducts: [], registry: new Map() };
   try {
     const mem = await mastra.getAgent("supervisor").getMemory();
     if (!mem) return empty;
     const { messages } = await mem.recall({ threadId, resourceId, perPage: 10, page: 0 });
     const shown = new Set<number>();
+    const registry = new Map<number, Product>();
     let priorProducts: LeanShown[] = [];
     for (const m of messages) {
       if (m.role !== "assistant") continue;
@@ -203,6 +240,7 @@ export async function loadThreadContext(
         for (const p of (group as ProductResultsPart)?.products ?? []) {
           if (typeof p?.id === "number") {
             shown.add(p.id);
+            registry.set(p.id, p as Product);
             turnProducts.push({ id: p.id, title: p.title, price: p.price, brand: p.brand, rating: p.rating });
           }
         }
@@ -210,7 +248,7 @@ export async function loadThreadContext(
       // Messages come oldest→newest, so the last assistant turn with products wins.
       if (turnProducts.length) priorProducts = turnProducts.slice(0, 12);
     }
-    return { shownIds: [...shown], priorProducts };
+    return { shownIds: [...shown], priorProducts, registry };
   } catch {
     return empty;
   }

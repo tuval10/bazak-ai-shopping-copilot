@@ -544,3 +544,54 @@ sub-agent the tool drives. Model: `gpt-5.4-mini` (judgment-heavy; nano was unrel
   literal decide-then-act control flow and multi-round capability.
 - *Per-item reasoning as a card field* (extend `ProductResultsPart` + frontend) — deferred; per-item
   reasoning lives in the woven prose, so no schema/FE change was needed.
+
+---
+
+## D16 — Recommendation / value / comparison as `display` variants of `ProductResultsPart`, picked by two new supervisor tools  ·  *added 2026-06-29*
+
+> **Builds on D6/D12/D15.** Adds three buyer-facing presentation outcomes without adding a new stream
+> part type — they ride the existing `data-product-results` part, so the whole streaming + persistence +
+> rehydration path carries them unchanged.
+
+**Decision:** Give the supervisor two more grounded tools alongside `find_products`:
+- **`recommend_product`** — spotlights **one** already-shown product with a badge (`recommended` or
+  `best-value`) + a reason. Renders as a hero card (US-2.2/2.3).
+- **`compare_products`** — lays **two** already-shown products side by side as a spec table, with an
+  optional `winnerId` (US-2.4).
+
+Both **reuse the existing part type**: the schema gains an optional `display`
+(`grid` | `recommendation` | `comparison`) discriminator plus `badge`/`winnerId`, and the model's reason
+reuses the existing `rationale` field. The frontend branches on `display` (`ProductResults` →
+`RecommendationCard` / `ProductComparison` / the default `ProductCardGroup`).
+
+**Why this shape (not new part types):** `workflowOutputSchema`, D12 persistence (`RESULTS_METADATA_KEY`),
+history rehydration (`extractResults`), and the D6 stream parser (`extractProductPart`) **all** flow
+through `productResultsPartSchema`. Extending that one schema makes spotlights/comparisons stream,
+persist, and rehydrate with **zero** new plumbing — a separate part type would have tripled all four
+seams.
+
+**How the invariants survive (the crux — same as D15):**
+- **Grounding stays structural.** The model only picks product **ids** + writes the reason; **code**
+  resolves the real `Product` from a per-turn **grounding registry** (full records seeded from prior
+  turns' persisted results + grown as `find_products` lands groups) and emits the card. An unknown id is
+  refused, not invented.
+- **The caps hold.** Both tools share the run-local `stepCounter`/`SUPERVISOR_MAX_STEPS` guard, so they
+  count as steps and can't loop.
+
+**Behavioral policy (in the supervisor prompt):** clear best fit / "choose one" → recommend
+(`recommended`); value ask → recommend (`best-value`); "torn between X and Y" → compare; **ambiguous**
+("help me choose") → the bot's judgement, optimising for the buyer clicking (clear winner → recommend
+one; close call → compare two). The bot **may also** recommend **proactively** after a search when one
+result is a standout likely to convert — used sparingly, with the full grid still shown.
+
+**Accepted costs:**
+- A spotlight/comparison about prior products now produces a results group (so it counts toward the
+  turn's `results` and gets chips). Intended — it *is* a rendered result.
+- The registry only holds products from the recall window (`perPage: 10`); a reference to a product shown
+  far earlier than that won't ground and is refused rather than guessed (grounding over reach).
+
+**Alternatives rejected:**
+- *New `data-product-recommendation` / `data-product-comparison` part types* — cleaner separation but
+  triples the stream/persist/rehydrate/FE plumbing for what is just products + presentation metadata.
+- *Prose-only follow-ups (status quo)* — the supervisor could already recommend/compare in text; it
+  produced no focused, clickable affordance, which is exactly the conversion lever this adds.

@@ -134,9 +134,11 @@ frontend/
 │   │   │   ├── Loading.tsx            # typing dots + status + skeletons
 │   │   │   └── Composer.tsx           # input + send
 │   │   ├── products/
-│   │   │   ├── ProductResults.tsx     # all groups + "Showing X of Y / Show more"  D6
+│   │   │   ├── ProductResults.tsx     # all groups + "Showing X of Y / Show more"; branches on display  D6/D16
 │   │   │   ├── ProductCardGroup.tsx   # one labelled group per intent     US-1.3
 │   │   │   ├── ProductCard.tsx        # title · desc · price · image · stock · deal  US-2.1/1.7
+│   │   │   ├── RecommendationCard.tsx # single spotlighted pick + badge   US-2.2/2.3/D16
+│   │   │   ├── ProductComparison.tsx  # two products side-by-side spec table  US-2.4/D16
 │   │   │   └── NoResults.tsx          # names the relaxed constraint      US-4.4
 │   │   ├── conversations/
 │   │   │   ├── Sidebar.tsx            # logo + new + list + search        US-3.2/3.3/3.4
@@ -159,6 +161,8 @@ frontend/
 │   ├── components/
 │   │   ├── ProductCard.test.tsx
 │   │   ├── ProductResults.test.tsx
+│   │   ├── RecommendationCard.test.tsx
+│   │   ├── ProductComparison.test.tsx
 │   │   ├── Sidebar.test.tsx
 │   │   └── RememberedPrefs.test.tsx
 │   ├── mocks/

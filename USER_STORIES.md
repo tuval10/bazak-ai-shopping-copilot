@@ -93,6 +93,38 @@ As a user, I want results shown as rich cards in the conversation so that I can 
 - Each product renders as a UI card (not plain text) including: **title, short description, price, image.**
 - Multiple results render as a scannable group within the chat flow.
 
+### US-2.2 — Get a single recommended pick
+As a user, when I ask the bot to *choose for me* ("choose one for me", "which should I get?"), I want it
+to spotlight **one** product as its pick so that I don't have to weigh the whole list myself.
+
+- The bot picks one already-shown product and renders it as a single **"Recommended"** highlight card
+  (badge + the product card + a short reason for the pick).
+- The pick is **grounded**: it's always one of the products actually shown this conversation (chosen by
+  id), never invented — the reason is the only model-authored prose.
+- **Decision — proactive recommendation:** the bot *may also* spotlight one product right after a search,
+  unprompted, when one option is a clear standout and highlighting it will help the buyer decide (i.e. it's
+  a good fit and likely to convert). It does this sparingly — not on every turn — and the full grid still
+  shows so the user keeps the choice.
+
+### US-2.3 — Get the best value-for-money pick
+As a user, when I ask for value ("I want something worth my bucks", "best bang for the buck"), I want the
+bot to spotlight the option that balances price and quality so that I feel I'm spending well.
+
+- Renders the same single-product highlight as US-2.2 but with a **"Best value for money"** badge.
+- Same grounding rule: the highlighted product is one actually shown, picked by id.
+
+### US-2.4 — Compare two products side by side
+As a user, when I'm torn between two options ("I'm conflicted between X and Y", "help me choose"), I want
+them laid out side by side so that the trade-off is obvious.
+
+- Renders a **two-column comparison** of two already-shown products: image + title + price per column,
+  over a spec table (price, rating, availability, brand, discount).
+- May mark one column as the suggested pick ("Best pick") when the bot has a lean.
+- Both products are **grounded** — picked by id from what was shown.
+- **Decision — ambiguous "help me choose":** the bot uses its judgement to maximise the chance the buyer
+  clicks — if one product is a clear winner it **recommends one** (US-2.2); if it's a close call between
+  two strong options it **compares them** side by side (optionally leaning toward one).
+
 ---
 
 ## Epic 3 — Conversation Persistence & Management

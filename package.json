@@ -9,10 +9,16 @@
     "frontend"
   ],
   "scripts": {
+    "dev": "concurrently -n server,frontend -c blue,magenta \"npm:dev:server\" \"npm:dev:frontend\"",
+    "dev:server": "npm run dev --workspace=@bazak/server",
+    "dev:frontend": "npm run dev --workspace=@bazak/frontend",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
   }
 }

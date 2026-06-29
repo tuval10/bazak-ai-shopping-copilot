@@ -13,8 +13,10 @@ Components:
 1. [User Message](#user-message)
 2. [Bot Message](#bot-message)
 3. [Product Catalog](#product-catalog)
-4. [No Results Found](#no-results-found)
-5. [Loading / Bot Thinking](#loading--bot-thinking)
+4. [Recommendation Spotlight](#recommendation-spotlight)
+5. [Product Comparison](#product-comparison)
+6. [No Results Found](#no-results-found)
+7. [Loading / Bot Thinking](#loading--bot-thinking)
 
 ---
 
@@ -80,6 +82,50 @@ The in-chat rendering of retrieved products — the heart of [US-2.1](../USER_ST
   type). Out-of-stock items are visually de-emphasized but still honest.
 - **Accessibility:** each card is keyboard-reachable; images carry alt text; price and availability are
   text, not color-only signals.
+
+---
+
+## Recommendation Spotlight
+
+A single product the bot puts forward as **its pick** ([US-2.2](../USER_STORIES.md), US-2.3). Used when
+the user asks the bot to choose ("choose one for me", "which is the best value?") and, sparingly, when the
+bot proactively highlights a standout after a search to help the buyer commit.
+
+- **Content:** one [Product Catalog](#product-catalog) card promoted into a hero card, with:
+  - A **badge ribbon** — **"Recommended"** (a clear best fit) or **"Best value for money"** (a value ask).
+  - A short **reason** for the pick (the only model-authored prose; the card facts stay grounded).
+- **Variants:** the two badges are the same component with different accent + copy; they're chosen by the
+  bot from the user's intent.
+- **Behavior:**
+  - **Grounded:** the spotlighted product is always one already shown this conversation, picked by id —
+    never invented (US-5.1).
+  - **Proactive use is sparing** — only when one option genuinely stands out and would help the buyer
+    decide; the bot does not spotlight on every turn, and the full grid still stands so the user keeps the
+    choice (US-2.2 decision).
+- **Appearance:** visually elevated above a normal card (accent border + badge) so it reads as a
+  deliberate recommendation, not just another result.
+- **Accessibility:** the badge is text (not color-only); the card stays keyboard-reachable with alt text.
+
+---
+
+## Product Comparison
+
+Two products laid **side by side** so a torn buyer can see the trade-off at a glance
+([US-2.4](../USER_STORIES.md)). Used for "I'm conflicted between X and Y" and ambiguous "help me choose"
+turns where there's no single clear winner.
+
+- **Content:** a two-column layout — each column shows the product's image, title, and price — over a
+  **spec table** comparing: **price, rating, availability, brand, discount**.
+- **Winner hint:** the bot may mark one column **"Best pick"** (highlighted) when it has a lean; otherwise
+  the two are presented evenly.
+- **Behavior:**
+  - **Grounded:** both products are real, already-shown items picked by id (US-5.1).
+  - **Decision — ambiguous asks:** for "help me choose" the bot decides between this side-by-side view and
+    a single [Recommendation Spotlight](#recommendation-spotlight) based on whether there's a clear winner,
+    optimising for the choice most likely to help the buyer act (US-2.4 decision).
+- **Appearance:** aligned rows so values compare cleanly down each column; readable on mobile.
+- **Accessibility:** the table is a real table with row labels; the "Best pick" marker is text, not
+  color-only.
 
 ---
 

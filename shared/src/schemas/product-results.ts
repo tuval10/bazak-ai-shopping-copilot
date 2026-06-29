@@ -15,6 +15,19 @@ export const relaxedConstraintSchema = z.object({
 export type RelaxedConstraint = z.infer<typeof relaxedConstraintSchema>;
 
 /**
+ * How the frontend renders a results group (US-2.2/2.3/2.4):
+ * - `grid` (default, absent) — the card grid `find_products` streams (US-2.1).
+ * - `recommendation` — ONE product spotlighted with a `badge` ("Recommended" or
+ *   "Best value for money") and the `rationale` as the pitch.
+ * - `comparison` — exactly TWO products side-by-side as a spec table, optionally
+ *   marking a `winnerId`.
+ * Picked by the supervisor via the recommend_product / compare_products tools.
+ */
+export const productDisplaySchema = z.enum(["grid", "recommendation", "comparison"]);
+
+export type ProductDisplay = z.infer<typeof productDisplaySchema>;
+
+/**
  * The D6 stream part: one merchandised group of products. The generate step
  * writes one of these per group onto the workflow stream; the frontend renders
  * each as a product-card group (US-1.3 multi-intent, US-2.1).
@@ -22,12 +35,23 @@ export type RelaxedConstraint = z.infer<typeof relaxedConstraintSchema>;
  * A single finder can emit several groups when it relaxes soft constraints along
  * different axes (US-4.4): `rationale` is the model-authored pitch for the group,
  * `relaxed` is the deterministic fact about which constraint was loosened.
+ *
+ * `display` (+ `badge`/`winnerId`) selects a focused presentation variant
+ * (US-2.2/2.3/2.4); absent means the default grid. These are deliberately part of
+ * the SAME part type so the whole D6 streaming + D12 persistence/rehydration path
+ * carries them with no extra plumbing.
  */
 export const productResultsPartSchema = z.object({
   intent: z.string(),
   products: z.array(productSchema),
   rationale: z.string().optional(),
   relaxed: relaxedConstraintSchema.optional(),
+  /** Presentation variant; absent = `grid` (the default card grid). */
+  display: productDisplaySchema.optional(),
+  /** Which badge to show for a `recommendation` group. */
+  badge: z.enum(["recommended", "best-value"]).optional(),
+  /** For a `comparison` group, the product id to mark as the suggested pick. */
+  winnerId: z.number().int().positive().optional(),
 });
 
 export type ProductResultsPart = z.infer<typeof productResultsPartSchema>;

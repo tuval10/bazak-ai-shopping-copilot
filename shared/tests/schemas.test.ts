@@ -102,6 +102,41 @@ describe("productResultsPartSchema", () => {
       }),
     ).toThrow();
   });
+
+  it("defaults to no display variant (the grid) when display is absent", () => {
+    const parsed = productResultsPartSchema.parse({ intent: "x", products: [validProduct] });
+    expect(parsed.display).toBeUndefined();
+    expect(parsed.badge).toBeUndefined();
+  });
+
+  it("accepts a recommendation variant with a badge", () => {
+    const parsed = productResultsPartSchema.parse({
+      intent: "My pick for you",
+      products: [validProduct],
+      display: "recommendation",
+      badge: "best-value",
+      rationale: "Cheapest solid option.",
+    });
+    expect(parsed.display).toBe("recommendation");
+    expect(parsed.badge).toBe("best-value");
+  });
+
+  it("accepts a comparison variant with a winnerId", () => {
+    const parsed = productResultsPartSchema.parse({
+      intent: "Side-by-side",
+      products: [validProduct, { ...validProduct, id: 2 }],
+      display: "comparison",
+      winnerId: 2,
+    });
+    expect(parsed.display).toBe("comparison");
+    expect(parsed.winnerId).toBe(2);
+  });
+
+  it("rejects an unknown display variant", () => {
+    expect(() =>
+      productResultsPartSchema.parse({ intent: "x", products: [validProduct], display: "carousel" }),
+    ).toThrow();
+  });
 });
 
 describe("profileSchema", () => {

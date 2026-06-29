@@ -33,6 +33,23 @@ describe("ProductResults", () => {
     const { container } = render(<ProductResults groups={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("renders a recommendation group as a spotlight card, not a grid", () => {
+    render(
+      <ProductResults
+        groups={[mockGroup({ display: "recommendation", badge: "recommended", intent: "My pick for you" })]}
+      />,
+    );
+    expect(screen.getByTestId("recommendation-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("product-group")).not.toBeInTheDocument();
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
+  });
+
+  it("renders a comparison group as a side-by-side table", () => {
+    render(<ProductResults groups={[mockGroup({ display: "comparison", intent: "Side-by-side" })]} />);
+    expect(screen.getByTestId("product-comparison")).toBeInTheDocument();
+    expect(screen.queryByTestId("product-group")).not.toBeInTheDocument();
+  });
 });
 
 describe("BotMessage", () => {
