@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Markdown } from "./Markdown";
 
 /** Bazak's avatar — indigo "B" normally, amber "!" for the error tone. */
 function Avatar({ tone }: { tone: "default" | "error" }) {
@@ -38,13 +39,13 @@ export function BotMessage({
     <div className="flex gap-2.5">
       <Avatar tone={tone} />
       <div
-        className={`rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] whitespace-pre-wrap break-words ${
+        className={`rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[85%] break-words ${
           isError
             ? "bg-amber-50 border border-amber-200 text-amber-900"
             : "bg-slate-100 text-slate-800"
         }`}
       >
-        {text}
+        {text && <Markdown text={text} />}
         {children}
         {isError && onRetry && (
           <button

@@ -2,6 +2,7 @@
 
 import type { ProductResultsPart } from "@bazak/shared";
 import { useState } from "react";
+import { RECOMMEND_BADGE } from "@/lib/badges";
 import {
   discountBadge,
   formatPrice,
@@ -11,12 +12,6 @@ import {
   stockInfo,
 } from "@/lib/format";
 import { FALLBACK_IMAGE } from "@/lib/images";
-
-/** The two spotlight flavours: copy + accent for each badge (US-2.2/2.3). */
-const BADGE = {
-  recommended: { label: "Recommended", icon: "⭐", ring: "border-bazak", chip: "bg-bazak text-white" },
-  "best-value": { label: "Best value for money", icon: "💰", ring: "border-emerald-400", chip: "bg-emerald-500 text-white" },
-} as const;
 
 /**
  * A single product spotlighted as the assistant's pick (US-2.2/2.3): a hero card with a
@@ -31,7 +26,7 @@ export function RecommendationCard({ group }: { group: ProductResultsPart }) {
 
   if (!product) return null;
 
-  const badge = BADGE[group.badge ?? "recommended"];
+  const badge = RECOMMEND_BADGE[group.badge ?? "recommended"];
   const stock = stockInfo(product);
   const discounted = hasDiscount(product);
 

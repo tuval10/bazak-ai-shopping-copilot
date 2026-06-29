@@ -20,6 +20,9 @@ import { type CatalogDeps } from "../../pipeline/retrieve";
 export const findProductsInputSchema = searchIntentSchema;
 export type FindProductsInput = z.infer<typeof findProductsInputSchema>;
 
+/** Cards shown per group/page. "Show more" pages the next PRODUCTS_PER_GROUP, no repeats. */
+export const PRODUCTS_PER_GROUP = 3;
+
 /** A lean product view the model reasons over — never the full record (grounding). */
 const leanProductSchema = z.object({
   id: z.number(),
@@ -144,7 +147,7 @@ export async function runFindProducts(
   opts.usedFinders.push(input);
 
   const resolved: ResolvedOptions = {
-    limit: opts.limit ?? 5,
+    limit: opts.limit ?? PRODUCTS_PER_GROUP,
     fetchSize: opts.fetchSize ?? 100,
     toolLimit: opts.toolLimit ?? 10,
     maxSteps: opts.finderMaxSteps,

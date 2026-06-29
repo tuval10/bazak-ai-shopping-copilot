@@ -1,18 +1,25 @@
 import type { ProductResultsPart } from "@bazak/shared";
+import type { RecommendBadge } from "@/lib/badges";
 import { intentEmoji } from "@/lib/format";
 import { ProductCard } from "./ProductCard";
+
+/** The catalog shows at most this many cards per group (UI cap; the backend also limits). */
+const MAX_GRID_PRODUCTS = 3;
 
 /**
  * One intent's results as a labelled card grid (US-1.3). The label is shown when a
  * turn has multiple groups (multi-intent), so each block is identifiable; a single
  * group leans on the assistant's summary instead. An empty group states it plainly.
+ * A product whose id is in `recommendedBadges` wears an inline pick badge.
  */
 export function ProductCardGroup({
   group,
   showLabel = false,
+  recommendedBadges,
 }: {
   group: ProductResultsPart;
   showLabel?: boolean;
+  recommendedBadges?: Map<number, RecommendBadge>;
 }) {
   return (
     <div data-testid="product-group">
@@ -21,23 +28,14 @@ export function ProductCardGroup({
           {intentEmoji(group.intent)} {group.intent}
         </p>
       )}
-      {/* Why we're showing these: the model-authored angle + the deterministic relaxation. */}
-      {(group.rationale || group.relaxed) && (
-        <div className="mb-1.5 flex flex-wrap items-center gap-2">
-          {group.relaxed && (
-            <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-              Relaxed: {group.relaxed.from} → {group.relaxed.to}
-            </span>
-          )}
-          {group.rationale && <span className="text-xs text-slate-500">{group.rationale}</span>}
-        </div>
-      )}
+      {/* The retrieval `relaxed`/`rationale` are internal orchestration notes — never shown
+          to the shopper; the assistant's prose does any honest framing (US-4.4). */}
       {group.products.length === 0 ? (
         <p className="text-xs text-slate-500">No matching products for “{group.intent}”.</p>
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-          {group.products.map((product) => (
-            <ProductCard key={product.id} product={product} />
+          {group.products.slice(0, MAX_GRID_PRODUCTS).map((product) => (
+            <ProductCard key={product.id} product={product} badge={recommendedBadges?.get(product.id)} />
           ))}
         </div>
       )}

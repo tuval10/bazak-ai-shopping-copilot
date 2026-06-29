@@ -145,6 +145,8 @@ vite.config.ts.timestamp-*
 # Bazak — backend runtime
 server/data/*.db
 server/data/*.db-*
+# LibSQL db when `npm run dev` runs mastra from the repo root
+/data/
 .mastra/
 *.sqlite
 .DS_Store

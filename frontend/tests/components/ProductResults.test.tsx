@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ProductResults } from "@/components/products/ProductResults";
 import { BotMessage } from "@/components/chat/BotMessage";
-import { mockGroup } from "../mocks/product-results";
+import { mockGroup, mockProduct } from "../mocks/product-results";
 
 describe("ProductResults", () => {
   it("renders one labelled block per intent for a multi-intent turn", () => {
@@ -49,6 +49,46 @@ describe("ProductResults", () => {
     render(<ProductResults groups={[mockGroup({ display: "comparison", intent: "Side-by-side" })]} />);
     expect(screen.getByTestId("product-comparison")).toBeInTheDocument();
     expect(screen.queryByTestId("product-group")).not.toBeInTheDocument();
+  });
+
+  it("marks a recommended product inline in the grid and drops the duplicate hero", () => {
+    const grid = mockGroup({
+      intent: "laptops",
+      products: [mockProduct({ id: 1, title: "Yoga" }), mockProduct({ id: 2, title: "XPS" })],
+    });
+    const pick = mockGroup({
+      display: "recommendation",
+      badge: "recommended",
+      intent: "My pick",
+      products: [mockProduct({ id: 2, title: "XPS" })], // same id as a grid card
+    });
+    render(<ProductResults groups={[grid, pick]} />);
+    // the grid renders; the standalone hero for the same product does NOT (no dupe)
+    expect(screen.getByTestId("product-group")).toBeInTheDocument();
+    expect(screen.queryByTestId("recommendation-card")).not.toBeInTheDocument();
+    // the pick is marked inline on its card
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
+  });
+
+  it("keeps the hero when the recommended product is NOT in a grid this turn", () => {
+    const pick = mockGroup({
+      display: "recommendation",
+      badge: "best-value",
+      intent: "Best value for money",
+      products: [mockProduct({ id: 9, title: "Prior pick" })],
+    });
+    render(<ProductResults groups={[pick]} />);
+    expect(screen.getByTestId("recommendation-card")).toBeInTheDocument();
+    expect(screen.getByText("Best value for money")).toBeInTheDocument();
+  });
+
+  it("caps the grid at 3 cards even when a group carries more", () => {
+    const group = mockGroup({
+      intent: "phones",
+      products: [1, 2, 3, 4, 5].map((id) => mockProduct({ id, title: `P${id}` })),
+    });
+    render(<ProductResults groups={[group]} />);
+    expect(screen.getAllByTestId("product-card")).toHaveLength(3);
   });
 });
 

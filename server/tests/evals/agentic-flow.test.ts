@@ -88,6 +88,18 @@ describe("converse — supervisor loop + grounding", () => {
     expect(result.finders).toHaveLength(1); // recorded for persistence
   });
 
+  it("caps a group at PRODUCTS_PER_GROUP (3) even when more match", async () => {
+    const { result, productParts } = await runTurn({
+      deps: catalog([1, 2, 3, 4, 5].map((id) => makeProduct({ id }))),
+      script: async (find) => {
+        await find({ label: "phones", keywords: "phone" });
+        return "Here are a few phones.";
+      },
+    });
+    expect(productParts).toHaveLength(1);
+    expect(result.results[0]?.products.map((p) => p.id)).toEqual([1, 2, 3]); // not all 5
+  });
+
   it("multi-intent → one find_products call per angle, grouped", async () => {
     const { result, productParts } = await runTurn({
       deps: catalogByKeyword({ phone: [makeProduct({ id: 1 })], bag: [makeProduct({ id: 2 })] }),

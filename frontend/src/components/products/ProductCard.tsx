@@ -2,6 +2,7 @@
 
 import type { Product } from "@bazak/shared";
 import { useState } from "react";
+import { RECOMMEND_BADGE, type RecommendBadge } from "@/lib/badges";
 import {
   discountBadge,
   formatPrice,
@@ -24,7 +25,7 @@ const STOCK_PILL: Record<string, { dot: string; text: string }> = {
  * description, derived sale price + struck original, rating, availability and any
  * deal — out-of-stock items are de-emphasised. Built from `UX/mocks/components.html`.
  */
-export function ProductCard({ product }: { product: Product }) {
+export function ProductCard({ product, badge }: { product: Product; badge?: RecommendBadge }) {
   const [src, setSrc] = useState(product.thumbnail || FALLBACK_IMAGE);
   const [errored, setErrored] = useState(false);
 
@@ -32,14 +33,21 @@ export function ProductCard({ product }: { product: Product }) {
   const pill = STOCK_PILL[stock.state] ?? STOCK_PILL.in!;
   const discounted = hasDiscount(product);
   const outOfStock = stock.state === "out";
+  const mark = badge ? RECOMMEND_BADGE[badge] : null;
 
   return (
     <article
-      className={`bg-white rounded-xl border shadow-sm hover:shadow-md transition overflow-hidden flex flex-col ${
-        stock.state === "low" ? "border-amber-200" : "border-slate-200"
+      className={`bg-white rounded-xl shadow-sm hover:shadow-md transition overflow-hidden flex flex-col ${
+        mark ? `border-2 ${mark.ring}` : `border ${stock.state === "low" ? "border-amber-200" : "border-slate-200"}`
       } ${outOfStock ? "opacity-60" : ""}`}
       data-testid="product-card"
     >
+      {mark && (
+        <div className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold ${mark.chip}`}>
+          <span aria-hidden="true">{mark.icon}</span>
+          {mark.short}
+        </div>
+      )}
       <div className="relative aspect-square bg-slate-50">
         {/* eslint-disable-next-line @next/next/no-img-element -- plain <img> with JS fallback (no next/image). */}
         <img
