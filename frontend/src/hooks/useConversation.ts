@@ -1,6 +1,6 @@
 "use client";
 
-import type { ProductResultsPart } from "@bazak/shared";
+import type { ProductResultsPart, SuggestionChip } from "@bazak/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type UiMessage, getMessages, renameConversation } from "@/api-client/conversations";
 import { runTurn } from "@/api-client/turn";
@@ -8,9 +8,10 @@ import { type MastraClient, mastraClient } from "@/lib/mastra-client";
 
 export type ConversationStatus = "loading" | "idle" | "streaming" | "error";
 
-/** The assistant turn being streamed: cards accumulate, prose lands at the end. */
+/** The assistant turn being streamed: cards + chips accumulate, prose lands at the end. */
 export interface StreamingTurn {
   groups: ProductResultsPart[];
+  chips: SuggestionChip[];
   text: string;
 }
 
@@ -22,6 +23,9 @@ export interface UseConversation {
   failedMessage: string | null;
   /** True if history couldn't be loaded (storage error, US-5.2). */
   loadError: boolean;
+  /** The composer draft — a suggestion chip prefills this (US: autofill next message). */
+  draft: string;
+  setDraft: (value: string) => void;
   send: (message: string) => Promise<void>;
   retry: () => Promise<void>;
   showMore: () => Promise<void>;
@@ -46,6 +50,7 @@ export function useConversation(
   const [streaming, setStreaming] = useState<StreamingTurn | null>(null);
   const [failedMessage, setFailedMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const [draft, setDraft] = useState("");
 
   // Tracks whether this turn is the first, to set the conversation title from it.
   const messageCountRef = useRef(0);
@@ -74,12 +79,12 @@ export function useConversation(
   const runStream = useCallback(
     async (message: string, isFirstTurn: boolean) => {
       setStatus("streaming");
-      setStreaming({ groups: [], text: "" });
+      setStreaming({ groups: [], chips: [], text: "" });
       setFailedMessage(null);
       try {
-        let last: StreamingTurn = { groups: [], text: "" };
+        let last: StreamingTurn = { groups: [], chips: [], text: "" };
         for await (const state of runTurn({ threadId, message }, client)) {
-          last = { groups: state.groups, text: state.text };
+          last = { groups: state.groups, chips: state.chips, text: state.text };
           setStreaming(last);
         }
         const assistant: UiMessage = {
@@ -88,6 +93,7 @@ export function useConversation(
           content: last.text,
           createdAt: new Date().toISOString(),
           ...(last.groups.length > 0 ? { results: last.groups } : {}),
+          ...(last.chips.length > 0 ? { chips: last.chips } : {}),
         };
         setMessages((prev) => [...prev, assistant]);
         setStreaming(null);
@@ -132,5 +138,16 @@ export function useConversation(
     await send("Show me more options.");
   }, [send]);
 
-  return { messages, status, streaming, failedMessage, loadError, send, retry, showMore };
+  return {
+    messages,
+    status,
+    streaming,
+    failedMessage,
+    loadError,
+    draft,
+    setDraft,
+    send,
+    retry,
+    showMore,
+  };
 }

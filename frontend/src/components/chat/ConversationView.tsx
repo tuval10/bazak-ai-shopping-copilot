@@ -9,6 +9,7 @@ import { ProductResults } from "@/components/products/ProductResults";
 import { BotMessage } from "./BotMessage";
 import { Composer } from "./Composer";
 import { Loading } from "./Loading";
+import { SuggestionChips } from "./SuggestionChips";
 import { UserMessage } from "./UserMessage";
 
 const EXAMPLE_PROMPTS = ["a phone under $500", "best-rated headphones", "something cheap and cool"];
@@ -44,11 +45,13 @@ function AssistantTurn({
   isLatest,
   onShowMore,
   showMorePending,
+  onSelectChip,
 }: {
   message: UiMessage;
   isLatest: boolean;
   onShowMore: () => void;
   showMorePending: boolean;
+  onSelectChip: (message: string) => void;
 }) {
   return (
     <div className="space-y-3">
@@ -61,6 +64,10 @@ function AssistantTurn({
             showMorePending={showMorePending}
           />
         </div>
+      )}
+      {/* Chips drive the NEXT message, so only the latest turn's are actionable. */}
+      {isLatest && message.chips && message.chips.length > 0 && (
+        <SuggestionChips chips={message.chips} onSelect={onSelectChip} />
       )}
     </div>
   );
@@ -78,7 +85,7 @@ export function ConversationView({
   threadId: string;
   client?: MastraClient;
 }) {
-  const { messages, status, streaming, failedMessage, loadError, send, retry, showMore } =
+  const { messages, status, streaming, failedMessage, loadError, draft, setDraft, send, retry, showMore } =
     useConversation(threadId, client);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +126,7 @@ export function ConversationView({
               isLatest={m.id === lastId}
               onShowMore={showMore}
               showMorePending={status === "streaming"}
+              onSelectChip={setDraft}
             />
           ),
         )}
@@ -130,6 +138,9 @@ export function ConversationView({
               <div className="pl-9">
                 <ProductResults groups={streaming.groups} />
               </div>
+            )}
+            {streaming.chips.length > 0 && (
+              <SuggestionChips chips={streaming.chips} onSelect={setDraft} />
             )}
           </div>
         )}
@@ -143,7 +154,12 @@ export function ConversationView({
         )}
       </div>
 
-      <Composer onSend={send} disabled={status === "streaming"} />
+      <Composer
+        onSend={send}
+        disabled={status === "streaming"}
+        value={draft}
+        onValueChange={setDraft}
+      />
     </div>
   );
 }

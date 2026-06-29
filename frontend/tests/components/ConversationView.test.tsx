@@ -38,9 +38,9 @@ describe("ConversationView", () => {
     const group = mockGroup({ intent: "headphones under $100" });
     runTurnMock.mockImplementation(
       streamOf([
-        { groups: [], text: "", status: "streaming" },
-        { groups: [group], text: "", status: "streaming" },
-        { groups: [group], text: "Here are the cheapest options 👇", status: "done" },
+        { groups: [], chips: [], text: "", status: "streaming" },
+        { groups: [group], chips: [], text: "", status: "streaming" },
+        { groups: [group], chips: [], text: "Here are the cheapest options 👇", status: "done" },
       ]),
     );
 
@@ -60,6 +60,28 @@ describe("ConversationView", () => {
     expect(screen.getAllByTestId("product-card").length).toBeGreaterThan(0);
   });
 
+  it("renders suggestion chips and autofills the composer when one is tapped", async () => {
+    const chips = [{ label: "Under $50", message: "only show the ones under $50" }];
+    runTurnMock.mockImplementation(
+      streamOf([
+        { groups: [], chips, text: "Here are some picks", status: "done" },
+      ]),
+    );
+
+    render(<ConversationView threadId="t1" />);
+    await screen.findByTestId("empty-state");
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Message Bazak"), "phones");
+    await user.click(screen.getByLabelText("Send"));
+
+    const chip = await screen.findByRole("button", { name: "Under $50" });
+    await user.click(chip);
+
+    // The chip's message is dropped into the composer (editable, not auto-sent).
+    expect(screen.getByLabelText("Message Bazak")).toHaveValue("only show the ones under $50");
+  });
+
   it("renders an error bubble with Retry when the turn fails, then recovers", async () => {
     runTurnMock.mockImplementationOnce(() => {
       throw new Error("network");
@@ -76,7 +98,9 @@ describe("ConversationView", () => {
     expect(retry).toBeInTheDocument();
 
     // Retry succeeds this time.
-    runTurnMock.mockImplementation(streamOf([{ groups: [], text: "Found these.", status: "done" }]));
+    runTurnMock.mockImplementation(
+      streamOf([{ groups: [], chips: [], text: "Found these.", status: "done" }]),
+    );
     await user.click(retry);
     expect(await screen.findByText("Found these.")).toBeInTheDocument();
   });

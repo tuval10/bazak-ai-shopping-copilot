@@ -2,6 +2,9 @@ import {
   PRODUCT_RESULTS_PART_TYPE,
   type ProductResultsPart,
   productResultsPartSchema,
+  SUGGESTED_CHIPS_PART_TYPE,
+  type SuggestionChip,
+  suggestedChipsPartSchema,
 } from "@bazak/shared";
 import {
   type MastraClient,
@@ -17,6 +20,8 @@ import {
  */
 export interface TurnState {
   groups: ProductResultsPart[];
+  /** One-tap follow-up/filter suggestions that autofill the composer. */
+  chips: SuggestionChip[];
   text: string;
   status: "streaming" | "done";
 }
@@ -33,6 +38,20 @@ export interface RawTurnChunk {
 interface FinalOutput {
   message: string;
   results: ProductResultsPart[];
+  chips: SuggestionChip[];
+}
+
+/**
+ * Pull the suggestion-chips payload out of a data part (same defensive shape as
+ * `extractProductPart`). Returns null when the chunk isn't a valid chips part.
+ */
+function extractChipsPart(chunk: RawTurnChunk): SuggestionChip[] | null {
+  const payload = chunk.payload as { data?: unknown } | undefined;
+  for (const candidate of [chunk.data, payload?.data, chunk.payload]) {
+    const parsed = suggestedChipsPartSchema.safeParse(candidate);
+    if (parsed.success) return parsed.data.chips;
+  }
+  return null;
 }
 
 /**
@@ -59,7 +78,7 @@ function extractProductPart(chunk: RawTurnChunk): ProductResultsPart | null {
 function extractFinalOutput(chunk: RawTurnChunk): FinalOutput | null {
   const payload = chunk.payload as { output?: unknown } | undefined;
   for (const candidate of [payload?.output, chunk.payload, chunk.data]) {
-    const c = candidate as { message?: unknown; results?: unknown } | undefined;
+    const c = candidate as { message?: unknown; results?: unknown; chips?: unknown } | undefined;
     if (!c || typeof c.message !== "string" || !Array.isArray(c.results)) continue;
     const results: ProductResultsPart[] = [];
     let allValid = true;
@@ -71,7 +90,9 @@ function extractFinalOutput(chunk: RawTurnChunk): FinalOutput | null {
       }
       results.push(parsed.data);
     }
-    if (allValid) return { message: c.message, results };
+    if (!allValid) continue;
+    const chips = suggestedChipsPartSchema.safeParse({ chips: c.chips ?? [] });
+    return { message: c.message, results, chips: chips.success ? chips.data.chips : [] };
   }
   return null;
 }
@@ -86,8 +107,10 @@ export async function* parseTurnStream(
   chunks: AsyncIterable<RawTurnChunk>,
 ): AsyncGenerator<TurnState> {
   const groups: ProductResultsPart[] = [];
+  let chips: SuggestionChip[] = [];
   let text = "";
   let finalResults: ProductResultsPart[] | null = null;
+  let finalChips: SuggestionChip[] | null = null;
 
   for await (const chunk of chunks) {
     if (!chunk || typeof chunk.type !== "string") continue;
@@ -96,7 +119,16 @@ export async function* parseTurnStream(
       const part = extractProductPart(chunk);
       if (part) {
         groups.push(part);
-        yield { groups: [...groups], text, status: "streaming" };
+        yield { groups: [...groups], chips, text, status: "streaming" };
+      }
+      continue;
+    }
+
+    if (chunk.type === SUGGESTED_CHIPS_PART_TYPE) {
+      const parsed = extractChipsPart(chunk);
+      if (parsed) {
+        chips = parsed;
+        yield { groups: [...groups], chips, text, status: "streaming" };
       }
       continue;
     }
@@ -105,12 +137,13 @@ export async function* parseTurnStream(
     if (final) {
       text = final.message;
       finalResults = final.results;
+      finalChips = final.chips;
     }
   }
 
-  // Prefer the generate step's authoritative results; fall back to what streamed in.
+  // Prefer the generate step's authoritative results/chips; fall back to what streamed in.
   const resolved = finalResults && finalResults.length > 0 ? finalResults : groups;
-  yield { groups: resolved, text, status: "done" };
+  yield { groups: resolved, chips: finalChips ?? chips, text, status: "done" };
 }
 
 /** ReadableStream → async iterable, tolerant of runtimes where it isn't already iterable. */

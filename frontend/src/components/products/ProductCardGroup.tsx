@@ -21,6 +21,17 @@ export function ProductCardGroup({
           {intentEmoji(group.intent)} {group.intent}
         </p>
       )}
+      {/* Why we're showing these: the model-authored angle + the deterministic relaxation. */}
+      {(group.rationale || group.relaxed) && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          {group.relaxed && (
+            <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+              Relaxed: {group.relaxed.from} → {group.relaxed.to}
+            </span>
+          )}
+          {group.rationale && <span className="text-xs text-slate-500">{group.rationale}</span>}
+        </div>
+      )}
       {group.products.length === 0 ? (
         <p className="text-xs text-slate-500">No matching products for “{group.intent}”.</p>
       ) : (

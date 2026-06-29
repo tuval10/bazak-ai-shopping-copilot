@@ -11,6 +11,22 @@ export interface ServerEnv {
   openaiApiKey: string;
   /** LibSQL connection string — an absolute file URL by default, `:memory:` in tests. */
   databaseUrl: string;
+  /**
+   * Max Product Discovery finders the orchestrator may spawn per turn (the LLM may
+   * propose more; only this many run). Caps the per-turn fan-out.
+   */
+  maxProductFinders: number;
+  /**
+   * Max catalog API calls a single finder may make across its focused query +
+   * relaxation fan-out. Worst case per turn = maxProductFinders × discoveryMaxCalls.
+   */
+  discoveryMaxCalls: number;
+}
+
+/** Parse a positive integer env var, falling back to `fallback` when unset/invalid. */
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  const n = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
 /**
@@ -30,5 +46,7 @@ export function loadEnv(): ServerEnv {
   return {
     openaiApiKey: process.env.OPENAI_API_KEY ?? "",
     databaseUrl,
+    maxProductFinders: parsePositiveInt(process.env.MAX_PRODUCT_FINDERS, 5),
+    discoveryMaxCalls: parsePositiveInt(process.env.DISCOVERY_MAX_CALLS, 10),
   };
 }

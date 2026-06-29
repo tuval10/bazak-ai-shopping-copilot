@@ -22,6 +22,11 @@ isolation (US-6.1), and gives a clean seam between UI and logic.
 
 ## D2 — Explicit pipeline orchestration (not a single agent + tools)
 
+> **Note (2026-06-29):** the *principle* below — a deterministic, testable spine with
+> non-determinism boxed into discrete LLM steps — **still stands**, but the concrete shape is
+> **superseded by D13**: the pipeline is now `orchestrate → discover → generate` (an orchestrator
+> + sub-agents), and the model tier moved to `gpt-5.4-mini` for the planning/judgment steps.
+
 **Decision:** Layer 4 is a deterministic pipeline:
 `classify + extract → route → plan + retrieve → generate`. The LLM is used for two discrete
 sub-tasks (classify, generate); everything between is plain, testable code.
@@ -74,6 +79,13 @@ Memory API.
 
 > **Supersedes** the original D4 (append-only JSONL, one file per conversation). This reverses that
 > decision deliberately — see *Why changed* below.
+
+> **Note (2026-06-29):** working memory holds **durable preferences only** (name, lasting budget,
+> favoured/disliked categories/brands) — never the current query or a running conversation summary.
+> The scope is **resource** (persists across all of a user's threads), so storing transient query
+> phrases leaks them into later, unrelated conversations and corrupts planning (D13). The generator
+> instructions + the `notes` field description enforce this; `DELETE /profile` (D9a) clears it for a
+> fresh slate before testing.
 
 **Why:**
 - We committed to **Mastra** for orchestration (D7). Letting it also own persistence removes an entire
@@ -324,3 +336,108 @@ exact groups that were shown is both faithful and free at read time.
 **Alternatives rejected:**
 - *Re-retrieve on history load* — avoids storing anything, but is slower, can drift, and re-does work.
 - *Don't persist (prose only)* — simplest, but loses cards on resume and undercuts US-3.1.
+
+---
+
+## D13 — Agentic orchestrator + sub-agents (hybrid workflow shell)  ·  *added 2026-06-29*
+
+> **Amends D2.** D2's *principle* — a deterministic, testable spine with non-determinism boxed into
+> discrete LLM steps — **still stands**. What changes: the LLM seams and the retrieval step become an
+> **orchestrator + sub-agents**, and retrieval gains an agentic relaxation loop. The shape is still a
+> **Mastra workflow** (D7), *not* an agent-with-tools loop.
+
+**Decision:** Replace `classify → route → retrieve → generate` with `orchestrate → discover →
+generate`, where each step is a deterministic workflow step that calls one specialized agent for its
+single judgment:
+- **orchestrator** — decomposes the turn (multi-intent → several "finders"), classifies
+  `product`/`chitchat`/`off_catalog`, marks hard-vs-soft constraints, and flags continuations (D14).
+  One planning call per turn.
+- **discovery** (sub-agent) — called *only* when a finder's focused query is weak; proposes ordered
+  **relaxation axes** (drop a soft constraint / broaden a keyword), which code executes — computing the
+  deterministic `relaxed` fact (constraint + real catalog value) and merchandising several framed groups.
+- **concierge** — chit-chat + the honest off-catalog decline (only when discovery returns nothing).
+- **generator** — unchanged role: grounded prose; holds conversation memory (D4).
+
+"Sub-agents" are specialized `agent.generate()` calls invoked *from steps* (all registered as real
+Mastra agents → visible in Studio), **not** tool-call delegation.
+
+**Two-tier budget (deterministic caps):** `MAX_PRODUCT_FINDERS` (.env, default 5) caps finders/turn
+(`slice` in orchestrate — the model may propose more, only N run); `DISCOVERY_MAX_CALLS` (.env, default
+10) caps catalog calls/finder (a decrementing counter). Worst case 5×10 = **50 calls/turn**, asserted in
+evals.
+
+**Concurrent fan-out:** finders run in `Promise.all` inside the single `discover` step — *not*
+workflow-level `.parallel()`/`.foreach()`. Finder count is dynamic (1–5); `.parallel` needs a static
+step array, and `.foreach` isolates iterations and fights the per-turn shared state (categories fetched
+once, cross-finder dedup, the turn ceiling). One step scope handles dynamic N, shares that state, and
+holds the single stream writer so each group streams as its finder resolves. Finder-level tracing via
+`createChildSpan` keeps the top-level trace linear.
+
+**Grounding by construction (extends US-5.1):** products, prices, images, and the `relaxed` from/to
+values flow catalog → typed stream parts → never through an LLM. The model authors only *framing* —
+prose, each group's `rationale`, and suggestion-chip phrasing (chip *options* are data-derived and
+Zod-validated). Hard-constraint enforcement, both budgets, dedup, and the relaxed facts are code.
+
+**Model selection (updates D2/D7):** the orchestrator, discovery, and concierge run on
+**`gpt-5.4-mini`**, not nano. The per-turn judgments are now genuinely harder than "classify/extract" —
+hard-vs-soft constraints, what *not* to invent, which axis to relax without drifting off-topic — and
+nano was unreliable (over-marking plain "under $100" as hard; over-broadening relaxation into junk). We
+pay for stronger judgment rather than patch model output with regex. Discovery is mini despite running
+up to 5×/turn because it only fires on *weak* finders.
+
+**Observability:** structured logging via **`@mastra/loggers` PinoLogger** registered on the Mastra
+instance (replaced an ad-hoc `console.log` trace), level-gated by `LOG_LEVEL`, unified with Mastra's own
+step/agent traces.
+
+**Why (over the prior deterministic flow):** the old flow returned one focused result set — it couldn't
+*merchandise*: relax a too-tight budget across several framed angles, or present adjacent items for an
+off-catalog ask (US-4.1/4.2/4.4). The orchestrator also decides finder count dynamically (multi-intent,
+off-catalog adjacency) instead of a fixed extract.
+
+**Why hybrid over a full supervisor (agent-with-tools):** grounding by construction (products never
+enter an LLM turn), *provable* budget caps (`slice` + a counter, not soft `maxSteps`), and reuse of the
+injectable seams (`CatalogDeps`, `PartWriter`) the eval suite already fakes. Cost: no dynamic mid-turn
+re-planning by the model — an accepted, explicitly-preferred trade. Matches "a simpler solution you can
+defend."
+
+**Alternatives rejected:**
+- *Supervisor agent with tools (model calls retrieve/relax)* — flexible, but non-deterministic budgets,
+  breaks grounding (the model would handle product data), pricier, harder to eval.
+- *Regex gate for hard-vs-soft / invented constraints* — tried and removed; the LLM should judge. (For
+  continuations, D14 sidesteps invention deterministically instead.)
+- *Workflow `.parallel()` / `.foreach()` for fan-out* — a static array / isolated iterations don't fit a
+  dynamic finder count over shared per-turn state.
+
+---
+
+## D14 — "Show me more" via deterministic continuation  ·  *added 2026-06-29*
+
+**Decision:** A pure "show me more / next / others" turn is handled as a **continuation**, not a
+re-plan. The orchestrator flags `continuation: true` and emits no finders; the discover step then
+**reuses the prior turn's finder** and **excludes every already-shown product id**, paging forward. Both
+the prior finder and the shown ids are read from the **persisted assistant-message metadata** (D12) —
+the turn's finders are persisted alongside its results under a `finders` metadata key. Dedup + paging
+are plain code; the model does no id bookkeeping.
+
+**Why:** "show me more" must return the *next* products with no repeats. Letting the orchestrator
+re-plan a vague follow-up was wrong twice over: it **invented constraints** (a fabricated `$150–$500`
+band) and **repeated products** (no notion of what was already shown). Both are deterministic concerns:
+- *No repeats* — exclude shown ids (read from D12 metadata) before paginating.
+- *No re-invention* — a continuation reuses the exact prior finder, so there is nothing to re-extract or
+  fabricate; the original constraints carry forward unchanged.
+
+**Why not push "what was shown" into the orchestrator:** it never sees product ids (grounding — D13),
+and LLMs are unreliable at exact id bookkeeping across turns. Shown-id tracking is deterministic state,
+so it lives in code, seeded from the store we already write each turn.
+
+**Failure handling:** best-effort — if the flag is missed or no prior context is found, it falls back to
+a normal plan (degrades, never crashes).
+
+**Alternatives rejected:**
+- *Let the orchestrator re-plan "show me more"* — the observed behavior: invented filters + repeated
+  products.
+- *A deterministic citation check on every constraint* (model cites the user-text span; code drops
+  constraints not substring-present) — considered for the broader invented-constraints problem, but not
+  adopted; the continuation path removes the need for the common (follow-up) case without extra machinery.
+- *Server-side `skip`/offset paging* — viable (DummyJSON supports `skip`), but exclude-by-id over the
+  already-fetched window is simpler, robust to re-sorting, and reuses persisted state.
