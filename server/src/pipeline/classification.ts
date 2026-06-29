@@ -31,6 +31,13 @@ export type ConstraintKey = z.infer<typeof constraintKeySchema>;
 export const searchIntentSchema = z.object({
   /** Short human-readable label, e.g. "phone under $500". */
   label: z.string(),
+  /**
+   * Rich, natural-language situational context the supervisor hands the finder —
+   * the "why" behind this angle (e.g. "the user is flying to Tokyo and may want a
+   * carry-on bag for the flight"). Guides how the finder breaks the angle into
+   * queries; never a hard filter. Optional so existing finders/literals stay valid.
+   */
+  brief: z.string().optional(),
   /** Free-text keywords for `/products/search`. */
   keywords: z.string().optional(),
   /** A category term to resolve to a real slug (US-1.6). */

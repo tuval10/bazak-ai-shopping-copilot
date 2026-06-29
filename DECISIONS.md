@@ -482,3 +482,65 @@ a normal plan (degrades, never crashes).
   adopted; the continuation path removes the need for the common (follow-up) case without extra machinery.
 - *Server-side `skip`/offset paging* — viable (DummyJSON supports `skip`), but exclude-by-id over the
   already-fetched window is simpler, robust to re-sorting, and reuses persisted state.
+
+---
+
+## D15 — Supervisor orchestrator with a `find_products` tool  ·  *added 2026-06-29*
+
+> **Amends D13/D14.** D13's hybrid 3-step spine (`orchestrate → discover → generate`) is **replaced**
+> by a single **supervisor agent loop**. D13's *grounding-by-construction* principle and D14's
+> continuation guarantee **still stand** — they are preserved by code around the loop, not by the loop.
+
+**Decision:** Collapse the turn into one workflow step (`converseStep`) that runs a **supervisor agent**
+with a single tool, `find_products`. The supervisor *drives* the turn:
+- It decides **whether** to retrieve at all. For a follow-up about products already shown ("which do you
+  recommend?", "what's the difference?") it **answers directly** from conversation memory + a
+  PREVIOUSLY-SHOWN-PRODUCTS block — **no finder runs**. The old linear flow always ran discovery.
+- For a shopping request it calls `find_products` **once per angle** (multi-intent → several; an
+  off-catalog ask → a few adjacent briefs it then declines honestly while merchandising). Each call
+  carries a rich natural-language **brief** (the situational "why"), not just keywords.
+- Each call **returns its grounded results to the supervisor** (a lean narrative), which it reads to
+  decide next steps and to write the reply — weaving **per-item reasoning into the prose** (kept in the
+  message text; no per-card schema change).
+
+**Why (over D13's linear hybrid):** the orchestrator never saw results, so it couldn't *decide-and-
+synthesize* (skip discovery, react to what was found, weave per-item reasoning) — and it always
+retrieved even when the answer was already on screen. A supervisor that owns the turn handles all three.
+
+**How the invariants survive going fully agentic** (the crux — the loop is agentic, the guarantees are
+code):
+- **Grounding stays structural.** `find_products` runs the *same* finder sub-agent as before (selects
+  products **by id** → code resolves real `Product`s) and **streams the cards itself** via the workflow
+  `writer` (`data-product-results` parts). The model gets only a lean view to reason over; it never
+  authors a card. The output contract (`{ message, results, chips }` + the stream parts + D12
+  rehydration) is **unchanged** — the frontend and shared schemas are untouched.
+- **Provable finder cap despite a soft loop.** A run-local counter in `find_products` hard-stops after
+  `MAX_PRODUCT_FINDERS` (returns `limitReached` instead of running), so the per-turn finder ceiling is
+  still code-enforced. `SUPERVISOR_MAX_STEPS` bounds the supervisor's tool-turns; `FINDER_MAX_STEPS`
+  still bounds each finder.
+- **Deterministic `relaxed` + dedup + continuation.** The finder's `relaxedFactFor`/hard-constraint
+  enforcement/`assembleGroups` are reused unchanged. Already-shown ids are loaded once per turn and
+  excluded from every call, so "show me more" pages forward with no repeats — D14's guarantee, now
+  enforced inside the loop rather than by a dedicated continuation step.
+
+**Roster change:** `orchestrator` + `generator` + `concierge` are retired and folded into one
+**`supervisor`** agent (it holds Memory → persists the transcript US-3.1 + learns durable preferences
+US-7.1, and writes all prose: merchandise, decline, chit-chat). `discovery` remains as the finder
+sub-agent the tool drives. Model: `gpt-5.4-mini` (judgment-heavy; nano was unreliable, per D13).
+
+**Accepted costs:**
+- The per-turn step cap is now **soft** (`maxSteps`) rather than a hard call counter — but the finder
+  cap that bounds catalog cost stays hard (the run-local counter).
+- The supervisor's **prose** is grounded by the lean summary the tool returns (it could mis-state a
+  price in prose) — the **cards remain authoritative** (code-emitted, by id). Same guarantee level as
+  D13's generator prose.
+- Multi-round tool use means a turn can be a few sequential finder calls before the reply (higher
+  latency/cost than the old single fan-out) — bounded by the two caps and accepted for the
+  decide-and-synthesize behavior.
+
+**Alternatives rejected:**
+- *Structured gate (plan → maybe-discover → synthesize as separate steps)* — keeps a deterministic spine
+  and would have been more incremental, but the user explicitly chose the supervisor loop for its
+  literal decide-then-act control flow and multi-round capability.
+- *Per-item reasoning as a card field* (extend `ProductResultsPart` + frontend) — deferred; per-item
+  reasoning lives in the woven prose, so no schema/FE change was needed.

@@ -1,11 +1,16 @@
 import { vi } from "vitest";
 import type { SearchIntent } from "../../src/pipeline/classification";
+import type { SupervisorAgent } from "../../src/pipeline/converse";
 import type { AgenticFinder, FinderResult } from "../../src/pipeline/discovery";
 import type {
   CategoryBrowseInput,
   ProductSearchInput,
   ProductSearchOutput,
 } from "../../src/mastra/tools/search-products";
+import type {
+  FindProductsInput,
+  FindProductsOutput,
+} from "../../src/mastra/tools/find-products";
 
 /** A search call against the run's `product_search` tool (populates the grounding registry). */
 export type ScriptedSearch = (input: ProductSearchInput) => Promise<ProductSearchOutput>;
@@ -52,6 +57,30 @@ export function scriptedFinder(
 
 /** A finder that returns no groups (the no-op / nothing-found path). */
 export const emptyFinder = (): AgenticFinder => scriptedFinder(async () => ({ groups: [] }));
+
+/** A call against the run's `find_products` tool (drives the finder + grounding/streaming). */
+export type ScriptedFind = (input: FindProductsInput) => Promise<FindProductsOutput>;
+
+/**
+ * A deterministic stand-in for the supervisor agent. Instead of an LLM driving the
+ * `find_products` tool and writing prose, the test supplies a `script` that calls the
+ * real injected tool (exercising the grounding registry, card streaming, dedup, and the
+ * run-local cap exactly as in production) and returns the reply text. The script
+ * receives a `find` bound to the run's tool and the user message.
+ */
+export function scriptedSupervisor(
+  script: (find: ScriptedFind, message: string) => Promise<string>,
+): SupervisorAgent {
+  return {
+    generate: vi.fn(async (message, options) => {
+      const tool = options.toolsets?.catalog?.find_products as {
+        execute: (input: FindProductsInput, ctx?: unknown) => Promise<FindProductsOutput>;
+      };
+      const find: ScriptedFind = (input) => tool.execute(input, {});
+      return { text: await script(find, message) };
+    }),
+  };
+}
 
 /**
  * A "happy path" finder: one focused search using the finder's own keywords +

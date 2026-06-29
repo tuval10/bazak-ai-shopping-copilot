@@ -22,6 +22,12 @@ export interface ServerEnv {
    * Worst case per turn ≈ maxProductFinders × finderMaxSteps tool calls.
    */
   finderMaxSteps: number;
+  /**
+   * Max tool-calling turns the supervisor may take per turn (its `find_products`
+   * calls + the final reply). Bounds the agentic loop. The run-local finder counter
+   * still hard-caps actual finder runs at `maxProductFinders` regardless of this.
+   */
+  supervisorMaxSteps: number;
 }
 
 /** Parse a positive integer env var, falling back to `fallback` when unset/invalid. */
@@ -49,5 +55,6 @@ export function loadEnv(): ServerEnv {
     databaseUrl,
     maxProductFinders: parsePositiveInt(process.env.MAX_PRODUCT_FINDERS, 5),
     finderMaxSteps: parsePositiveInt(process.env.FINDER_MAX_STEPS, 4),
+    supervisorMaxSteps: parsePositiveInt(process.env.SUPERVISOR_MAX_STEPS, 8),
   };
 }

@@ -1,31 +1,21 @@
 import type { WorkflowInput } from "@bazak/shared";
 import { describe, expect, it, vi } from "vitest";
-import type { OrchestrationPlan } from "../../src/pipeline/classification";
-import { type AgenticFinder, runDiscovery } from "../../src/pipeline/discovery";
-import { PRODUCT_RESULTS_PART, type TextGenerator } from "../../src/pipeline/generate";
-import { runGenerate, summarizeForPrompt } from "../../src/pipeline/generate";
-import { runOrchestrate, type StructuredOrchestrator } from "../../src/pipeline/orchestrate";
+import { runConverse, type ThreadContext } from "../../src/pipeline/converse";
 import type { CatalogDeps } from "../../src/pipeline/retrieve";
-import { passthroughFinder, scriptedFinder } from "../helpers/finder";
+import { passthroughFinder, type ScriptedFind, scriptedFinder, scriptedSupervisor } from "../helpers/finder";
 import { makeListResponse, makeProduct } from "../helpers/products";
 
 /**
- * Epic 4 edge-case evals (US-6.1): drive the agentic pipeline (orchestrate →
- * discover → generate) with a faked orchestrator/discovery (canned plan) and a
- * mocked catalog, asserting the decided behavior for each case. Model prose isn't
- * asserted (it's faked); we assert the deterministic shape + the prompt the model
- * is grounded with. The finder-cap / budget / soft-vs-hard guarantees live in
- * `agentic-flow.test.ts`; this file covers the end-to-end turn behaviors.
+ * Epic 4 edge-case evals (US-6.1): drive the supervisor turn (D15) with a scripted
+ * supervisor + the real finder/assembly path against a mocked catalog, asserting the
+ * decided behavior per case. Model prose is scripted (not asserted for wording); we
+ * assert the deterministic shape: which cards stream, grounding, relaxation, and the
+ * direct-answer path. The cap / soft-vs-hard guarantees live in `agentic-flow.test.ts`.
  */
 
+const CATS = [{ slug: "smartphones", name: "smartphones" }];
 const input: WorkflowInput = { message: "x", threadId: "t", resourceId: "local-user" };
 
-const fakeOrchestrator = (plan: OrchestrationPlan): StructuredOrchestrator => ({
-  generate: vi.fn(async () => ({ object: plan })),
-});
-const fakeGenerator = (): TextGenerator => ({ generate: vi.fn(async () => ({ text: "reply" })) });
-
-// A few cheap products a focused keyword query finds as-is (no relaxation needed).
 function catalog(
   products = [
     makeProduct({ id: 1, price: 20 }),
@@ -36,69 +26,84 @@ function catalog(
   return {
     searchProducts: vi.fn(async () => makeListResponse(products)),
     getCategoryProducts: vi.fn(async () => makeListResponse(products)),
-    getCategories: vi.fn(async () => [{ slug: "smartphones", name: "smartphones" }]),
+    getCategories: vi.fn(async () => CATS),
   };
 }
 
-/** Drive orchestrate → discover → generate end to end with a faked plan + catalog. */
-async function run(
-  plan: OrchestrationPlan,
-  deps = catalog(),
-  turn: WorkflowInput = input,
-  finder: AgenticFinder = passthroughFinder(),
-) {
-  const orchestrated = await runOrchestrate(turn.message, fakeOrchestrator(plan));
-  const state = await runDiscovery(orchestrated, deps, finder);
-  const gen = fakeGenerator();
-  const parts: Array<{ type: string }> = [];
-  const output = await runGenerate({
-    input: turn,
-    state,
-    agent: gen,
+/** A catalog returning DIFFERENT products per keyword (so distinct finders don't dedup away). */
+function catalogByKeyword(map: Record<string, ReturnType<typeof makeProduct>[]>): CatalogDeps {
+  return {
+    searchProducts: vi.fn(async (q: string) => makeListResponse(map[q] ?? [])),
+    getCategoryProducts: vi.fn(async () => makeListResponse([])),
+    getCategories: vi.fn(async () => CATS),
+  };
+}
+
+function runTurn(opts: {
+  script: (find: ScriptedFind, message: string) => Promise<string>;
+  deps?: CatalogDeps;
+  context?: ThreadContext;
+  turn?: WorkflowInput;
+  finderAgent?: ReturnType<typeof passthroughFinder>;
+}) {
+  const parts: Array<{ type: string; [k: string]: unknown }> = [];
+  return runConverse({
+    input: opts.turn ?? input,
+    supervisor: scriptedSupervisor(opts.script),
+    finderAgent: opts.finderAgent ?? passthroughFinder(),
+    categories: CATS,
+    context: opts.context ?? { shownIds: [], priorProducts: [] },
+    deps: opts.deps ?? catalog(),
     writer: { custom: (d) => void parts.push(d) },
-  });
-  const productParts = parts.filter((p) => p.type === PRODUCT_RESULTS_PART);
-  return { state, output, parts, productParts, gen };
+    maxFinders: 5,
+    finderMaxSteps: 4,
+    supervisorMaxSteps: 8,
+  }).then((result) => ({
+    result,
+    parts,
+    productParts: parts.filter((p) => p.type === "data-product-results"),
+  }));
 }
 
 describe("Epic 4 edge cases", () => {
-  it("ambiguous/subjective → assume + show results (US-4.1)", async () => {
-    // "something cheap and cool" → best-guess: budget + top-rated, shown immediately.
-    const { state, productParts } = await run({
-      kind: "product",
-      finders: [
-        { label: "cheap & cool", keywords: "popular", maxPrice: 100, sort: { field: "rating", order: "desc" } },
-      ],
+  it("ambiguous/subjective → assume + show results immediately (US-4.1)", async () => {
+    const { result, productParts } = await runTurn({
+      script: async (find) => {
+        await find({ label: "cheap & cool", keywords: "popular", maxPrice: 100, sort: { field: "rating", order: "desc" } });
+        return "Some popular picks:";
+      },
     });
-    expect(state.kind).toBe("product");
-    expect(productParts).toHaveLength(1); // shows results immediately, doesn't block on a question
-    expect(state.results[0]?.products.length).toBeGreaterThan(0);
+    expect(productParts).toHaveLength(1); // shows results, doesn't block on a question
+    expect(result.results[0]?.products.length).toBeGreaterThan(0);
   });
 
   it("multi-intent → decompose + answer all, grouped (US-1.3)", async () => {
-    const { output, productParts } = await run({
-      kind: "product",
-      finders: [
-        { label: "a phone", keywords: "phone" },
-        { label: "a laptop bag", keywords: "bag" },
-      ],
+    const { result, productParts } = await runTurn({
+      deps: catalogByKeyword({ phone: [makeProduct({ id: 1 })], bag: [makeProduct({ id: 2 })] }),
+      script: async (find) => {
+        await find({ label: "a phone", keywords: "phone" });
+        await find({ label: "a laptop bag", keywords: "bag" });
+        return "Both:";
+      },
     });
     expect(productParts).toHaveLength(2);
-    expect(output.results.map((r) => r.intent)).toEqual(["a phone", "a laptop bag"]);
+    expect(result.results.map((r) => r.intent)).toEqual(["a phone", "a laptop bag"]);
   });
 
   it("grounding → only retrieved products are emitted, none invented (US-5.1)", async () => {
-    const only = [makeProduct({ id: 42 }), makeProduct({ id: 43 })];
-    const { output } = await run(
-      { kind: "product", finders: [{ label: "thing", keywords: "thing" }] },
-      catalog(only),
-    );
-    const ids = output.results.flatMap((r) => r.products.map((p) => p.id));
+    const { result } = await runTurn({
+      deps: catalog([makeProduct({ id: 42 }), makeProduct({ id: 43 })]),
+      script: async (find) => {
+        await find({ label: "thing", keywords: "thing" });
+        return "Found:";
+      },
+    });
+    const ids = result.results.flatMap((r) => r.products.map((p) => p.id));
     expect(ids).toEqual([42, 43]); // exactly the catalog's products
   });
 
   it("no results → relax a SOFT constraint and name it + the real value (US-4.4)", async () => {
-    // Nothing under $100; cheapest available is $110. The finder drops the soft ceiling.
+    // Nothing under $100; cheapest is $110. The inner finder drops the soft ceiling.
     const deps = catalog([makeProduct({ id: 1, price: 110 }), makeProduct({ id: 2, price: 140 })]);
     const finder = scriptedFinder(async (search) => {
       await search({ keywords: "phone", maxPrice: 100 }); // 0 matched
@@ -114,63 +119,60 @@ describe("Epic 4 edge cases", () => {
         ],
       };
     });
-    const { state } = await run(
-      { kind: "product", finders: [{ label: "phone under $100", keywords: "phone", maxPrice: 100 }] },
+    const { result } = await runTurn({
       deps,
-      input,
-      finder,
-    );
-    const relaxed = state.results.find((r) => r.relaxed);
-    expect(relaxed?.products.length).toBeGreaterThan(0); // nearest alternatives shown
-    // The grounding prompt surfaces the relaxed constraint + the actual cheapest found.
-    const prompt = summarizeForPrompt(state);
-    expect(prompt).toMatch(/RELAXED maxPrice/);
-    expect(prompt).toContain("under $100"); // names the relaxed constraint
-    expect(prompt).toContain("$110"); // and the actual cheapest available
-  });
-
-  it("off-catalog with nothing relevant → decline + suggest nearest, no products (US-4.2)", async () => {
-    // Off-catalog finders that the (empty) catalog can't fulfil → concierge decline.
-    const empty = catalog([]);
-    const { state, productParts, output } = await run(
-      { kind: "off_catalog", finders: [{ label: "travel pillow", keywords: "travel pillow" }] },
-      empty,
-    );
-    expect(productParts).toHaveLength(0);
-    expect(output.results).toEqual([]);
-    expect(summarizeForPrompt(state)).toMatch(/can't fulfil|nearest/i);
-  });
-
-  it("chit-chat → friendly reply, no products (US-4.3)", async () => {
-    const { parts, output } = await run({ kind: "chitchat", finders: [] });
-    expect(parts).toHaveLength(0);
-    expect(output.message).toBeTruthy();
-  });
-
-  it("follow-up → memory context is carried into generation (US-4.5, mechanism)", async () => {
-    // The generator receives thread+resource memory, so replies are context-aware.
-    const { gen } = await run({ kind: "product", finders: [{ label: "p", keywords: "p" }] });
-    expect(gen.generate).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ memory: { thread: "t", resource: "local-user" } }),
-    );
-  });
-
-  it("follow-up → orchestrator resolves refinements against prior turns (US-4.5)", async () => {
-    // With prior-turn context, orchestrate rewrites an implicit refinement ("show me
-    // cheaper") into a full finder. Assert the orchestrator prompt now carries BOTH the
-    // current message and the recent conversation.
-    const orchestrator = fakeOrchestrator({
-      kind: "product",
-      finders: [{ label: "cheaper headphones", keywords: "headphones", sort: { field: "price", order: "asc" } }],
+      finderAgent: finder,
+      script: async (find) => {
+        const out = await find({ label: "phone under $100", keywords: "phone", maxPrice: 100 });
+        // The lean narrative tells the supervisor a constraint was relaxed + the real value.
+        expect(out.groups[0]?.relaxed?.constraint).toBe("maxPrice");
+        return "Nothing under $100, but here's the closest.";
+      },
     });
-    const prior = "user: wireless headphones under $100\nassistant: Here are some budget picks.";
+    const relaxed = result.results.find((r) => r.relaxed);
+    expect(relaxed?.relaxed?.from).toContain("100");
+    expect(relaxed?.relaxed?.to).toContain("110"); // the actual cheapest found
+    expect(relaxed?.products.length).toBeGreaterThan(0);
+  });
 
-    const plan = await runOrchestrate("show me cheaper", orchestrator, { priorContext: prior });
+  it("off-catalog with nothing relevant → decline, no products (US-4.2)", async () => {
+    const empty = catalog([]);
+    const { result, productParts } = await runTurn({
+      deps: empty,
+      turn: { message: "a flight to Tokyo", threadId: "t", resourceId: "local-user" },
+      script: async (find) => {
+        await find({ label: "travel pillow", keywords: "pillow", brief: "for the flight" });
+        return "I can't book flights, and didn't find anything relevant to suggest.";
+      },
+    });
+    expect(productParts).toHaveLength(0); // nothing matched → no cards
+    expect(result.results).toEqual([]);
+    expect(result.message).toMatch(/can't book|didn't find/i);
+  });
 
-    expect(plan.kind).toBe("product");
-    const [prompt] = (orchestrator.generate as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
-    expect(prompt).toContain("show me cheaper");
-    expect(prompt).toContain("wireless headphones under $100");
+  it("chit-chat → friendly reply, no products, no finder call (US-4.3)", async () => {
+    const { result, parts } = await runTurn({
+      turn: { message: "hi there", threadId: "t", resourceId: "local-user" },
+      script: async () => "Hi! What are you shopping for today?",
+    });
+    expect(parts).toHaveLength(0);
+    expect(result.message).toContain("shopping");
+    expect(result.results).toEqual([]);
+  });
+
+  it("follow-up about shown products → answers directly from context, no new search (US-4.5)", async () => {
+    const { result, productParts } = await runTurn({
+      turn: { message: "what's the difference between them?", threadId: "t", resourceId: "local-user" },
+      context: {
+        shownIds: [1, 2],
+        priorProducts: [
+          { id: 1, title: "Phone A", price: 200, rating: 4.5 },
+          { id: 2, title: "Phone B", price: 350, rating: 4.8 },
+        ],
+      },
+      script: async () => "Phone A is cheaper; Phone B is higher rated.",
+    });
+    expect(productParts).toHaveLength(0); // no re-search
+    expect(result.message).toContain("Phone A");
   });
 });

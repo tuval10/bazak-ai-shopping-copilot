@@ -1,8 +1,8 @@
-import type { ProductResultsPart } from "@bazak/shared";
+import { type ProductResultsPart, RESULTS_METADATA_KEY } from "@bazak/shared";
 import { describe, expect, it } from "vitest";
 import { RESOURCE_ID } from "../../src/config/env";
 import { createMemory } from "../../src/mastra/memory";
-import { RESULTS_METADATA_KEY, persistTurnResults } from "../../src/pipeline/generate";
+import { persistTurnResults } from "../../src/pipeline/generate";
 import { makeProduct } from "../helpers/products";
 
 /**

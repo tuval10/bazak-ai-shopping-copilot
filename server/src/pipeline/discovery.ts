@@ -2,11 +2,7 @@ import {
   type Product,
   type ProductResultsPart,
   type RelaxedConstraint,
-  RESULTS_METADATA_KEY,
-  workflowInputSchema,
 } from "@bazak/shared";
-import type { Mastra } from "@mastra/core";
-import { createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import {
   type Category,
@@ -17,27 +13,12 @@ import {
   type SortField,
   sortProducts,
 } from "../catalog";
-import { loadEnv } from "../config/env";
 import { createCategoryBrowseTool, createProductSearchTool } from "../mastra/tools/search-products";
 import { logger } from "../observability/logger";
-import {
-  type ConstraintKey,
-  FINDERS_METADATA_KEY,
-  type OrchestrationPlan,
-  orchestrationPlanSchema,
-  type SearchIntent,
-  searchIntentSchema,
-} from "./classification";
-import {
-  type CatalogDeps,
-  defaultDeps,
-  filtersFor,
-  type RetrieveState,
-  retrieveStateSchema,
-} from "./retrieve";
-import { looseSchema } from "./step-schema";
+import { type ConstraintKey, type SearchIntent } from "./classification";
+import { type CatalogDeps, filtersFor } from "./retrieve";
 
-/** Structured trace for the concurrent finder fan-out (visible at LOG_LEVEL=debug). */
+/** Structured trace for a finder run (visible at LOG_LEVEL=debug). */
 const trace = (msg: string, fields: Record<string, unknown> = {}) => {
   logger.debug(`discovery ${msg}`, { component: "discovery", ...fields });
 };
@@ -81,24 +62,8 @@ export interface AgenticFinder {
   ): Promise<{ object: unknown }>;
 }
 
-export interface DiscoveryOptions {
-  /** Products shown per group. */
-  limit?: number;
-  /** Products fetched per `product_search` call before client-side filter/sort. */
-  fetchSize?: number;
-  /** Products a single `product_search` call returns to the agent. */
-  toolLimit?: number;
-  /** Max tool-calling turns per finder run (FINDER_MAX_STEPS). */
-  maxSteps?: number;
-  /**
-   * Product ids already shown earlier in this thread — excluded from every group
-   * so a "show me more" continuation pages forward without repeats. Deterministic
-   * (not the model's job): the dedup happens here in code.
-   */
-  excludeIds?: number[];
-}
-
-type ResolvedOptions = {
+/** Per-run knobs for one finder: page sizes, the step cap, and the exclude (dedup) set. */
+export type ResolvedOptions = {
   limit: number;
   fetchSize: number;
   toolLimit: number;
@@ -163,10 +128,14 @@ export function buildFinderPrompt(finder: SearchIntent, categories: Category[]):
         formatCategoryList(categories),
       ]
     : [];
+  const briefBlock = finder.brief
+    ? ["", `CONTEXT (why the shopper wants this — use it to choose good queries): ${finder.brief}`]
+    : [];
   return [
     "Find products for this finder:",
     JSON.stringify(finder),
     `HARD constraints (never relax these): ${hard.length ? hard.join(", ") : "none"}.`,
+    ...briefBlock,
     ...catBlock,
     "",
     "Use `product_search` (by keyword) or `category_browse` (by slug) to retrieve, relax if too few, and return the best groups.",
@@ -215,7 +184,7 @@ export function assembleGroups(
  * (bound to a grounding registry) and let it search + relax within `maxSteps`, then
  * assemble its id-based selection into grounded, deduped, paginated groups.
  */
-async function runFinder(
+export async function runFinder(
   finder: SearchIntent,
   agent: AgenticFinder,
   deps: CatalogDeps,
@@ -259,117 +228,3 @@ async function runFinder(
   trace(`finder DONE "${finder.label}" → ${groups.length} groups, ${registry.size} products seen`);
   return groups;
 }
-
-/**
- * Agentic product discovery. Each finder runs as a tool-using agent that drives
- * `product_search` to retrieve + relax (replacing the old deterministic budgeted
- * loop), returning grounded groups. Finders run concurrently; each gets its own
- * grounding registry and `maxSteps` budget. Non-product/off-catalog finders are
- * retrieved identically — declining honestly is the generator's job.
- */
-export async function runDiscovery(
-  plan: OrchestrationPlan,
-  deps: CatalogDeps = defaultDeps,
-  finder?: AgenticFinder,
-  options: DiscoveryOptions = {},
-): Promise<RetrieveState> {
-  const opts: ResolvedOptions = {
-    limit: options.limit ?? 5,
-    fetchSize: options.fetchSize ?? 100,
-    toolLimit: options.toolLimit ?? 10,
-    maxSteps: options.maxSteps ?? 4,
-    exclude: new Set(options.excludeIds ?? []),
-  };
-
-  if (plan.kind === "chitchat" || plan.finders.length === 0) {
-    return { kind: plan.kind, results: [], notes: [], finders: [] };
-  }
-
-  // A no-op finder for tests/paths that never inject one — yields no products.
-  const agent: AgenticFinder = finder ?? { generate: async () => ({ object: { groups: [] } }) };
-
-  // Category list is injected into each finder's prompt (cached via the provider).
-  const categories = await deps.getCategories();
-
-  trace(`fan-out: ${plan.finders.length} finders concurrently (kind=${plan.kind})`, {
-    event: "fanout_start",
-    finders: plan.finders.length,
-    kind: plan.kind,
-  });
-  const perFinder = await Promise.all(plan.finders.map((f) => runFinder(f, agent, deps, categories, opts)));
-  const groups = perFinder.flat();
-  trace(`fan-out complete: ${groups.length} total groups`, { event: "fanout_done", groups: groups.length });
-
-  // Carry the finders forward so the turn can persist them (reused by a later
-  // "show me more" continuation).
-  return { kind: plan.kind, results: groups, notes: [], finders: plan.finders };
-}
-
-const searchIntentArraySchema = z.array(searchIntentSchema);
-
-/**
- * For a "show me more" continuation, recover what the previous turns in this thread
- * already did: the finders that ran (to reuse the exact search) and every product id
- * already shown (to page past them). Read from the assistant messages' persisted
- * metadata — the single source of truth we already write each turn. Best-effort: any
- * failure yields empty context and discovery falls back to the plan as-is.
- */
-async function loadContinuationContext(
-  mastra: Mastra,
-  threadId: string,
-  resourceId: string,
-): Promise<{ priorFinders: SearchIntent[]; shownIds: number[] }> {
-  const empty = { priorFinders: [] as SearchIntent[], shownIds: [] as number[] };
-  try {
-    const mem = await mastra.getAgent("generator").getMemory();
-    if (!mem) return empty;
-    const { messages } = await mem.recall({ threadId, resourceId, perPage: 10, page: 0 });
-    const shown = new Set<number>();
-    let priorFinders: SearchIntent[] = [];
-    for (const m of messages) {
-      if (m.role !== "assistant") continue;
-      const meta = (m.content as { metadata?: Record<string, unknown> })?.metadata ?? {};
-      const results = meta[RESULTS_METADATA_KEY];
-      if (Array.isArray(results)) {
-        for (const group of results) {
-          for (const p of (group as ProductResultsPart)?.products ?? []) {
-            if (typeof p?.id === "number") shown.add(p.id);
-          }
-        }
-      }
-      // Messages come oldest→newest, so the last assistant turn with finders wins.
-      const finders = searchIntentArraySchema.safeParse(meta[FINDERS_METADATA_KEY]);
-      if (finders.success && finders.data.length) priorFinders = finders.data;
-    }
-    return { priorFinders, shownIds: [...shown] };
-  } catch {
-    return empty;
-  }
-}
-
-/** Workflow step wrapper: pulls the finder agent + step cap from Mastra/env. */
-export const discoverStep = createStep({
-  id: "discover",
-  inputSchema: looseSchema(orchestrationPlanSchema),
-  outputSchema: looseSchema(retrieveStateSchema),
-  execute: async ({ inputData, mastra, getInitData }) => {
-    const plan = orchestrationPlanSchema.parse(inputData);
-    const agent = mastra.getAgent("discovery") as unknown as AgenticFinder;
-    const maxSteps = loadEnv().finderMaxSteps;
-
-    // "Show me more": reuse the prior finder + page past already-shown products,
-    // rather than re-planning (which would re-extract — or invent — constraints).
-    if (plan.continuation) {
-      const { threadId, resourceId } = workflowInputSchema.parse(getInitData());
-      const { priorFinders, shownIds } = await loadContinuationContext(mastra, threadId, resourceId);
-      if (priorFinders.length > 0) {
-        trace(`continuation: reusing ${priorFinders.length} prior finder(s), excluding ${shownIds.length} shown id(s)`);
-        const reused: OrchestrationPlan = { kind: "product", finders: priorFinders, continuation: true };
-        return runDiscovery(reused, defaultDeps, agent, { maxSteps, excludeIds: shownIds });
-      }
-      trace("continuation requested but no prior context found → planning fresh");
-    }
-
-    return runDiscovery(plan, defaultDeps, agent, { maxSteps });
-  },
-});
