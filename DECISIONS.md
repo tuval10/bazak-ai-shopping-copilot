@@ -2,7 +2,9 @@
 
 A running log of architectural decisions, why they were made, and the alternatives rejected.
 Lightweight ADR style. See [USER_STORIES.md](USER_STORIES.md) for scope and [FUTURE.md](FUTURE.md)
-for deferred work. Entries are **Accepted**; revised or newly added entries note their date.
+for deferred work. The body below reflects the **current** design; decisions that were later
+superseded live in **[Outdated decisions](#outdated-decisions)** at the end (which is why the numbering
+below skips D2, D13, D14). Entries are **Accepted**; revised or newly added entries note their date.
 
 ---
 
@@ -11,7 +13,7 @@ for deferred work. Entries are **Accepted**; revised or newly added entries note
 **Decision:** The browser is a thin client; orchestration, retrieval, and the OpenAI key live on a
 local server. The client POSTs a turn and renders the response.
 
-**Why:** Keeps the API key out of the browser, lets the pipeline be unit-tested/evaluated in
+**Why:** Keeps the API key out of the browser, lets the turn be unit-tested/evaluated in
 isolation (US-6.1), and gives a clean seam between UI and logic.
 
 **Alternatives rejected:**
@@ -20,53 +22,22 @@ isolation (US-6.1), and gives a clean seam between UI and logic.
 
 ---
 
-## D2 — Explicit pipeline orchestration (not a single agent + tools)
-
-> **Note (2026-06-29):** the *principle* below — a deterministic, testable spine with
-> non-determinism boxed into discrete LLM steps — **still stands**, but the concrete shape is
-> **superseded by D13**: the pipeline is now `orchestrate → discover → generate` (an orchestrator
-> + sub-agents), and the model tier moved to `gpt-5.4-mini` for the planning/judgment steps.
-
-**Decision:** Layer 4 is a deterministic pipeline:
-`classify + extract → route → plan + retrieve → generate`. The LLM is used for two discrete
-sub-tasks (classify, generate); everything between is plain, testable code.
-
-**Why:** Each arrow is a testable seam, cost/latency are predictable (two LLM calls per turn),
-non-determinism is boxed into two well-defined spots, and it's straightforward to defend
-("I control every step"). Matches the assignment's "a simpler solution you fully understand."
-
-**Alternatives rejected:**
-- *Single agent loop with tools* (model decides which tools to call) — more flexible and less code
-  for open-ended flows, but non-deterministic, harder to eval, and pricier per turn.
-
-**Model selection:** `gpt-5.4-nano` for classify/extract, `gpt-5.4-mini` for response generation.
-
----
-
 ## D3 — Server owns conversation persistence
 
-> **Note (2026-06-28):** the *principle* below stands, but the concrete **endpoint table is superseded
-> by D9** — the client now uses Mastra's built-in endpoints, not a custom `/api/conversations…` REST API.
+**Decision:** The server owns all conversation state. The client holds only the current conversation
+id (the Mastra **thread id**, D5) and sends `{ message, threadId, resourceId }` per turn; on refresh it
+re-fetches the conversation from the server by id. The concrete endpoints are **Mastra's built-in
+memory-thread + workflow-stream routes** (D9) over the **Mastra Memory** store (D4) — the server adds no
+hand-rolled REST layer beyond the single `/profile` route (D9a).
 
-**Decision:** The server owns all conversation state. The client holds only the current
-`conversationId` and sends `{ conversationId, message }` per turn. On refresh, the client re-fetches
-the conversation from the server by id.
-
-**Endpoints:**
-| Endpoint | Story |
-|---|---|
-| `POST /conversations` → new id | US-3.2 |
-| `GET /conversations` (+ `?q=` search) | US-3.3, US-3.4 |
-| `GET /conversations/{id}` → full history | US-3.1, US-3.3 |
-| `POST /conversations/{id}/messages` → run pipeline, persist, reply | US-1.x, US-4.x |
-
-**Why:** Persistence requirement (US-3.1) is satisfied server-side; the client stays genuinely thin;
-no server-side *session* coupling beyond loading a conversation by id. The store itself is **Mastra
-Memory** (D4) — these endpoints are thin wrappers over its API.
+**Why:** Persistence (US-3.1) is satisfied server-side; the client stays genuinely thin; there is no
+server-side *session* coupling beyond loading a conversation by id.
 
 **Alternatives rejected:**
-- *Client-owned persistence* (localStorage/IndexedDB, stateless server) — viable, but the user chose
-  a server-owned store so transcripts aren't tied to one browser and failure modes are centralized.
+- *Client-owned persistence* (localStorage/IndexedDB, stateless server) — viable, but a server-owned
+  store keeps transcripts off any one browser and centralizes failure modes.
+- *Custom REST API over Mastra Memory* — a hand-rolled `/api/conversations…` table (the original D3
+  shape); dropped for Mastra's built-in endpoints (D9), which already cover the whole thread lifecycle.
 
 ---
 
@@ -77,15 +48,11 @@ transcript and **working memory** holds per-user preferences — backed by **Lib
 default; a local SQLite engine). The persistence endpoints (D3) are thin wrappers over the Mastra
 Memory API.
 
-> **Supersedes** the original D4 (append-only JSONL, one file per conversation). This reverses that
-> decision deliberately — see *Why changed* below.
-
-> **Note (2026-06-29):** working memory holds **durable preferences only** (name, lasting budget,
-> favoured/disliked categories/brands) — never the current query or a running conversation summary.
-> The scope is **resource** (persists across all of a user's threads), so storing transient query
-> phrases leaks them into later, unrelated conversations and corrupts planning (D13). The generator
-> instructions + the `notes` field description enforce this; `DELETE /profile` (D9a) clears it for a
-> fresh slate before testing.
+> **Working memory holds durable preferences only** (name, lasting budget, favoured/disliked
+> categories/brands) — never the current query or a running conversation summary. The scope is
+> **resource** (persists across all of a user's threads), so storing transient query phrases would leak
+> them into later, unrelated conversations and corrupt the turn. The supervisor instructions (D15) + the
+> working-memory schema enforce this; `DELETE /profile` (D9a) clears it for a fresh slate before testing.
 
 **Why:**
 - We committed to **Mastra** for orchestration (D7). Letting it also own persistence removes an entire
@@ -93,23 +60,19 @@ Memory API.
   list/resume/search out of the box (US-3.x).
 - **Working memory** delivers the personalization loop (Epic 7) at near-config cost — learn, persist
   per-user, personalize replies — which is what motivated the change.
-- **Semantic recall** (vector search over past messages, LibSQL + FastEmbed) is then available for the
-  agentic future we're future-proofing for (D7); messages are already in the store.
+- **Semantic recall** (vector search over past messages, LibSQL + FastEmbed) is then available in the
+  same store as the agentic flow grows (D7); messages are already there.
 - Single store, less code, fewer moving parts to defend.
-
-**Why changed (honesty note):** the original JSONL decision leaned on **concurrency** and
-**portability** advantages we later conceded are weak for a *single-user, local* app. Its remaining
-pros (crash-safe appends, greppable transparency) are nice-to-haves now covered by **Mastra Studio +
-OpenTelemetry tracing**. Once personalization came "for free" with working memory and we were already
-on Mastra + LibSQL, a separate JSONL transcript stopped earning its keep.
 
 **Failure handling (US-5.2):** LibSQL is a durable embedded SQLite engine (WAL, atomic commits);
 handle write/disk errors gracefully and never surface a raw DB error to the user.
 
 **Alternatives rejected:**
-- *Append-only JSONL, one file per conversation* — the prior choice; clean for an immutable transcript
-  and transparent to inspect, but a second bespoke store that duplicates what Mastra threads give for
-  free and can't back semantic recall. Reasonable, but redundant once we're on Mastra.
+- *Append-only JSONL, one file per conversation* — the prior choice (original D4); clean for an
+  immutable transcript and transparent to inspect, but a second bespoke store that duplicates what
+  Mastra threads give for free and can't back semantic recall. Its concurrency/portability edge is weak
+  for a single-user local app, and crash-safe/greppable transparency is now covered by Mastra Studio +
+  OpenTelemetry tracing. Reasonable, but redundant once we're on Mastra.
 - *Postgres / other Mastra storage adapters* — fine, but heavier to run locally than LibSQL's single
   file; revisit if we outgrow local single-user.
 
@@ -130,69 +93,68 @@ conversations.
 
 ## D6 — Structured product results as streamed, typed parts  ·  *amended 2026-06-28*
 
-**Decision:** The server still produces per-intent product results — one entry per intent, each with its
-own `products` array (multi-intent → multiple entries; single intent → one). **Amendment:** rather than
-returning them as one custom JSON response body, the generate step **streams them as typed parts on the
-workflow stream** alongside the assistant text — one `product-results` part per intent (emitted via
-`writer.custom({ type: "data-product-results", data })`). Our own `ProductResults` component (D8) renders
-each part as a product-card group (US-2.1).
+**Decision:** The server produces per-intent product results — one entry per intent, each with its own
+`products` array (multi-intent → multiple entries; single intent → one) — and **streams them as typed
+parts on the workflow stream** alongside the assistant text, one `product-results` part per group
+(emitted via `writer.custom({ type: "data-product-results", data })`). Our own `ProductResults`
+component (D8) renders each part as a product-card group (US-2.1).
 
-Content per part is unchanged; only the envelope is now an AI-SDK-native part rather than a field in one
-JSON blob:
+Content per part (each its own typed part, not a single response body):
 
 ```jsonc
-// each streamed as its own typed "product-results" part, not a single response body:
 { "intent": "phone under $500", "products": [ {…}, {…} ] }
 { "intent": "laptop bag",       "products": [ {…} ] }
 ```
 
-> **Supersedes** the original D6 (a single JSON body: `{ message, results: [...] }` rendered by a custom
-> client renderer). Same content, AI-SDK-native envelope.
+> **D16 extension:** the part gains an optional `display` discriminator (`grid` | `recommendation` |
+> `comparison`) plus `badge`/`winnerId`, so spotlights and comparisons ride this **same** part type
+> through streaming, persistence (D12), and rehydration unchanged.
 
-**Why amended:** streaming results as typed parts (instead of one end-of-turn JSON body) lets cards render
-**as each intent resolves** and keeps the assistant text and the card groups in one ordered turn. Because
-the **D2 pipeline (not the model) produces the results**, the generate step **writes these as custom data
-parts** onto the workflow stream — the model never "decides" to call a tool. The frontend (D8) reads the
-`data-product-results` parts off the stream and renders each as a card group.
+**Why amended:** streaming results as typed parts (instead of one end-of-turn JSON body) lets cards
+render **as each group resolves** and keeps the assistant text and the card groups in one ordered turn.
+The **part is written by code** — the supervisor's tools call `writer.custom(...)` with products
+resolved **by id** (the model never authors card data, see D15/D16) — so grounding (US-5.1) is
+structural: only products the catalog actually returned are ever emitted.
 
 **Why (unchanged):** server shapes data, client owns presentation (US-2.1); multi-intent (US-1.3) falls
-out naturally as multiple parts. Grounding (US-5.1) stays server-enforced — only products actually
-returned by the catalog are ever emitted.
+out naturally as multiple parts.
 
 **Alternatives rejected:**
-- *Single custom JSON response body* (the original D6 shape) — simplest, but can't stream cards per intent
+- *Single custom JSON response body* (the original D6 shape) — simplest, but can't stream cards per group
   as each resolves; the part-based envelope gives progressive rendering for little extra cost.
 
 ---
 
 ## D7 — Orchestration framework: Mastra  ·  *added 2026-06-28*
 
-**Decision:** Build the orchestration layer (the D2 pipeline) on **Mastra** — a TS-native agent +
-workflow framework built on top of the Vercel AI SDK. The deterministic pipeline runs as Mastra
-workflow steps; agents back only the two LLM steps (classify, generate). SSE to the client uses
-`@mastra/ai-sdk` → AI SDK v5 streams, consumed by assistant-ui (D8). Conversation + preference storage
-use Mastra Memory (D4).
+**Decision:** Build the orchestration layer on **Mastra** — a TS-native **agent + workflow + memory**
+framework built on top of the Vercel AI SDK. We use the *whole* stack, not one piece: the turn runs as a
+Mastra **workflow** (`pipeline`) whose single step hosts a **supervisor agent loop** with grounded tools
+(D15); conversation + preference storage use Mastra **Memory** (D4); the client streams over the workflow
+stream via `@mastra/client-js` (D8/D9); Studio + OpenTelemetry trace every step/agent/tool.
 
 **Why:**
-- **Studio traceability / debugging** — Mastra Studio gives visual, step-level traces of each run,
-  making the pipeline observable and easy to debug.
-- **Future-proofing** — the flow is deterministic today, but we expect to add agents for new purposes;
-  Mastra's workflow + agent + memory primitives absorb that growth without a rewrite.
+- **Studio traceability / debugging** — Mastra Studio + OpenTelemetry give visual step/agent/tool-level
+  traces of each run. This became *load-bearing* once the turn went agentic: a multi-round, model-driven
+  loop is only defensible if you can see every tool call it made.
+- **Future-proofing — *(realized)*** — the flow was deterministic at first but went **agentic** (via the
+  retired D13 hybrid, then D15's supervisor loop) on these **same** workflow + agent + memory primitives,
+  with **no framework change** — exactly the growth this anticipated.
 - Matches the team's stack; first-class evals serve the testing requirement (US-6.1); reuses AI SDK at
   the UI edge so we still get best-in-class SSE streaming.
 
 **Alternatives rejected:**
-- *Vercel AI SDK direct* — lightest and simplest to fully explain; our deterministic flow wouldn't
-  strictly need a workflow engine. Rejected for the two reasons above (no Studio / no first-class
-  evals, no team-stack match) — the honest fallback if the flow stays non-agentic. Note Mastra is
-  built *on* AI SDK, so we keep its streaming either way.
+- *Vercel AI SDK direct* — lightest and simplest to fully explain, and Mastra is built *on* it (so we keep
+  its streaming either way). But no Studio/tracing, no first-class evals, no Memory primitive, and no
+  workflow engine — we'd hand-roll persistence, working memory, and the bounded-loop shell ourselves.
 - *LangChain / LangGraph (JS)* — powerful graph + durable checkpoints, but Python-first with grafted
   TS that trails releases, heavier, weaker serverless story.
-- *LibreChat* — a finished self-hosted chat product; wrong shape for a bespoke discovery pipeline with
+- *LibreChat* — a finished self-hosted chat product; wrong shape for a bespoke discovery flow with
   custom cards and our own persistence.
-- *Fully custom* — maximum control, but reinvents orchestration/streaming we'd rather not own.
+- *Fully custom* — maximum control, but reinvents orchestration/streaming/memory/tracing we'd rather not own.
 
-**Model selection (unchanged):** `gpt-5.4-nano` for classify/extract, `gpt-5.4-mini` for generation.
+**Model selection:** `gpt-5.4-mini` for both the supervisor and the discovery finder (D15); `gpt-5.4-nano`
+is no longer on the turn path (its judgments proved unreliable, D13).
 
 ---
 
@@ -210,10 +172,12 @@ autoscroll, loading/error states, a11y) is bespoke.
 Mastra adapter." Researching the *current* assistant-ui ⇄ Mastra story showed our backend is off
 assistant-ui's documented path:
 - Every official assistant-ui ⇄ Mastra integration assumes a Mastra **agent** stream (`@mastra/ai-sdk`
-  `chatRoute`), **not a workflow stream** — and our front door is the D2 **workflow** (`/api/workflows/
-  pipeline/stream`). Bridging would mean adding an agent-shaped conversion route purely to satisfy the UI.
-- `makeAssistantToolUI` — the exact API D6/D8 leaned on to render cards — is **deprecated** (superseded by
-  a toolkit API + a backend-pushed data-UI path), so the "single registration" advantage evaporated.
+  `chatRoute`), **not a workflow stream** — and our front door is the **workflow** stream
+  (`/api/workflows/pipeline/stream`). Bridging would mean adding an agent-shaped conversion route purely
+  to satisfy the UI.
+- `makeAssistantToolUI` — the exact API the original D6/D8 leaned on to render cards — is **deprecated**
+  (superseded by a toolkit API + a backend-pushed data-UI path), so the "single registration" advantage
+  evaporated.
 - Our cards are a **server-produced data part**, not a model tool-call; forcing them through a tool-UI is
   conceptually wrong and would need undocumented glue.
 
@@ -242,7 +206,7 @@ memory thread endpoints. Exactly **one** custom route is added (D9a) for the wor
 
 | Need | Endpoint | Story |
 |------|----------|-------|
-| Run a turn (pipeline) → stream text + `product-results` parts | `POST /api/workflows/{id}/stream` (`inputData: { message, threadId, resourceId }`) | US-1.x, US-4.x, US-7.x |
+| Run a turn → stream text + `product-results` parts | `POST /api/workflows/pipeline/stream` (`inputData: { message, threadId, resourceId }`) | US-1.x, US-2.x, US-4.x, US-7.x |
 | New conversation | `POST /api/memory/threads` | US-3.2 |
 | List / resume conversations | `GET /api/memory/threads` · `GET /api/memory/threads/{id}` | US-3.3 |
 | Conversation history (refresh) | `GET /api/memory/threads/{id}/messages` | US-3.1 |
@@ -268,10 +232,6 @@ endpoint.
 **Why:** we already committed to Mastra (D7) for orchestration *and* persistence (D4); its generated
 endpoints cover the turn + the entire thread lifecycle, so a parallel hand-rolled REST layer would be
 duplicate code wrapping the same calls. Less surface to build, test, and keep in sync.
-
-**Supersedes** the custom `POST/GET /api/conversations…` endpoint table in **D3** and **ARCHITECTURE §6**.
-D3's underlying principle — *the server owns persistence; the client holds only the conversation id* —
-**still stands**; only the concrete endpoints change (they're now Mastra's, not ours).
 
 **Alternatives rejected:**
 - *Custom REST API over Mastra Memory* (the original D3 table) — clean, fully our-designed contract, but
@@ -322,7 +282,9 @@ without a generated client.
 **Decision:** Persist each assistant turn's **product results** (the per-intent groups) alongside the
 assistant message in the thread, as message **metadata**, so loading history (`GET /api/memory/threads/
 {id}/messages`) rehydrates the **cards**, not just the prose. On a turn, results stream live as
-`data-product-results` parts (D6); on refresh/resume they come back from the persisted metadata.
+`data-product-results` parts (D6); on refresh/resume they come back from the persisted metadata. The
+turn's chips and finders are persisted under the same metadata, so "show me more" reuses the prior
+finder and the grounding registry can be re-seeded (D15/D16).
 
 **Why:** US-3.1 (resume on refresh) requires the conversation to come back *as it was*. The streamed parts
 are ephemeral — without persisting them, a resumed conversation would replay the assistant text with the
@@ -339,163 +301,14 @@ exact groups that were shown is both faithful and free at read time.
 
 ---
 
-## D13 — Agentic orchestrator + sub-agents (hybrid workflow shell)  ·  *added 2026-06-29*
+## D15 — Supervisor agent loop (one `converse` step) with grounded tools  ·  *added 2026-06-29*
 
-> **Amends D2.** D2's *principle* — a deterministic, testable spine with non-determinism boxed into
-> discrete LLM steps — **still stands**. What changes: the LLM seams and the retrieval step become an
-> **orchestrator + sub-agents**, and the **finder becomes a model-driven, tool-using agent** that owns
-> retrieval + relaxation by calling catalog search tools. The spine is still a **Mastra workflow** (D7):
-> the agent-with-tools loop is *scoped inside the single `discover` step* (bounded by `FINDER_MAX_STEPS`),
-> not a top-level supervisor that owns the whole turn.
-
-**Decision:** Replace `classify → route → retrieve → generate` with `orchestrate → discover →
-generate`, where each step is a deterministic workflow step that calls one specialized agent for its
-single judgment:
-- **orchestrator** — decomposes the turn (multi-intent → several "finders"), classifies
-  `product`/`chitchat`/`off_catalog`, marks hard-vs-soft constraints, and flags continuations (D14). It
-  is **category-aware**: the live catalog category list (cached, see below) is injected into its prompt,
-  so it routes against *real* categories and, for an off-catalog ask, still **merchandises** — spawning
-  finders that each target a real category slug (e.g. "flight to Tokyo" → `mobile-accessories`,
-  `sunglasses`, `womens-bags`). One planning call per turn.
-- **discovery** (the *finder* sub-agent) — runs once per finder; drives two catalog tools —
-  `product_search` (keyword) and `category_browse` (by slug) — to retrieve and, when too few match, relax
-  (broaden the keyword / browse a whole category / drop a *soft* constraint), then returns its chosen
-  products **by id** as ordered, framed groups. Code resolves ids → real products, enforces hard
-  constraints, dedups, and computes the deterministic `relaxed` fact (constraint + real catalog value).
-- **concierge** — chit-chat + the honest off-catalog decline (only when discovery returns nothing).
-- **generator** — unchanged role: grounded prose; holds conversation memory (D4).
-
-"Sub-agents" are specialized `agent.generate()` calls invoked *from steps* (all registered as real
-Mastra agents → visible in Studio), **not** tool-call delegation.
-
-**Two-tier budget (deterministic caps):** `MAX_PRODUCT_FINDERS` (.env, default 5) caps finders/turn
-(`slice` in orchestrate — the model may propose more, only N run); `FINDER_MAX_STEPS` (.env, default 4)
-caps the tool-calling turns per finder (Mastra `maxSteps` on the finder's `.generate()` — each step is
-one LLM call + tool cycle). Worst case 5 × 4 = **20 finder tool-loops/turn**. The finder cap is the model
-ceiling (`slice`, hard); the per-finder step cap is `maxSteps` (soft — the model usually stops earlier).
-
-**Concurrent fan-out:** finders run in `Promise.all` inside the single `discover` step — *not*
-workflow-level `.parallel()`/`.foreach()`. Finder count is dynamic (1–5); `.parallel` needs a static
-step array, and `.foreach` isolates iterations and fights the per-turn shared state (categories fetched
-once, cross-finder dedup, the turn ceiling). One step scope handles dynamic N, shares that state, and
-holds the single stream writer so each group streams as its finder resolves. Finder-level tracing via
-`createChildSpan` keeps the top-level trace linear.
-
-**Categories as shared context (not a tool):** the 24 real catalog categories are fetched once and cached
-in-memory for 24h by a `CategoriesProvider` singleton (concurrent-`get()` dedup onto one in-flight
-promise; returns `[]` *uncached* on failure so the next turn retries and every consumer degrades to
-current behavior). The list is injected as **prompt text** into both the orchestrator and the finder, so
-the model routes/keywords against real slugs. It is **never** exposed as a raw endpoint-list tool — the
-finder *retrieves* through the two scoped search tools (`product_search`, `category_browse`), and the
-category list is context it picks slugs from.
-
-**Per-category counts (one call, not 24):** each category line carries its size — `slug — name (N items)`
-— so the orchestrator can judge how thin a category is and broaden a finder when the best-fit category
-holds only a couple of items (its motivating case: "flight to Tokyo" → if a bag category is tiny, ask the
-finder for any bag and let it decide fit). The counts come from a **single** `/products?limit=0&select=category`
-request (the whole 194-product catalog, category field only — ~7 KB) tallied client-side, **not** 24
-per-category calls; it runs concurrently with the category-list fetch behind the same 24h cache (two cached
-calls/day total). Counts are a **nice-to-have**: if that one call fails, the list still serves *without*
-counts (the `(N items)` suffix is simply dropped) rather than failing the turn. Counts inform *planning
-breadth* only — they don't change grounding or the finder's own match-count-driven relaxation.
-
-**Grounding by construction (extends US-5.1):** the model never *authors* product data. The finder sees
-only a **lean read-only view** (id/title/price/rating/stock/…) returned by the search tools and selects
-products **by id**; code resolves those ids → real `Product` objects captured from the tool calls,
-dropping any unknown/hallucinated id. Prices, images, and the `relaxed` from/to values flow catalog →
-typed stream parts → never authored by an LLM. The model authors only *framing* — prose, each group's
-`rationale`, and suggestion-chip phrasing (chip *options* are data-derived and Zod-validated).
-Hard-constraint enforcement (re-applied **inside** the search tools *and* again in assembly), the
-finder/turn caps, dedup, and the relaxed facts are code.
-
-**Model selection (updates D2/D7):** the orchestrator, discovery, and concierge run on
-**`gpt-5.4-mini`**, not nano. The per-turn judgments are now genuinely harder than "classify/extract" —
-hard-vs-soft constraints, what *not* to invent, which axis to relax without drifting off-topic — and
-nano was unreliable (over-marking plain "under $100" as hard; over-broadening relaxation into junk). We
-pay for stronger judgment rather than patch model output with regex. Discovery is mini because it now
-drives multi-step tool use (search → read match counts → relax or browse) once per finder — judgment
-nano was inconsistent at, drifting off-topic when relaxing.
-
-**Observability:** structured logging via **`@mastra/loggers` PinoLogger** registered on the Mastra
-instance (replaced an ad-hoc `console.log` trace), level-gated by `LOG_LEVEL`, unified with Mastra's own
-step/agent traces.
-
-**Why (over the prior deterministic flow):** the old flow returned one focused result set — it couldn't
-*merchandise*: relax a too-tight budget across several framed angles, or present adjacent items for an
-off-catalog ask (US-4.1/4.2/4.4). The orchestrator also decides finder count dynamically (multi-intent,
-off-catalog adjacency) instead of a fixed extract.
-
-**Why scoped-agentic over a full supervisor (one model loop owning the turn):** the agentic loop is
-*scoped* — the finder calls tools to retrieve/relax, but inside a single workflow step, bounded by
-`FINDER_MAX_STEPS`, with its output **grounded by code** (ids → real products) and hard constraints
-re-enforced outside the model. The orchestrator (planning) and generator (prose) stay separate
-deterministic seams rather than one model-driven supervisor owning the whole turn. This keeps grounding
-by construction and reuse of the injectable seams (`CatalogDeps`, `PartWriter`) the eval suite fakes,
-while gaining **traced, model-driven retrieval** (each search/browse is a tool span). Cost: per-finder
-tool cost and a *soft* per-finder step cap (`maxSteps`) rather than a hard call counter — an accepted
-trade for traceability + adaptive relaxation.
-
-**Alternatives rejected:**
-- *Full supervisor owning the whole turn (one model loop calling retrieve/relax/respond)* — we adopted
-  agentic retrieval but kept it **scoped to the finder** with id-based grounding and a bounded tool-loop;
-  a single end-to-end supervisor would still break grounding (the model handling product data), lose the
-  separate provable finder cap, and be harder to eval.
-- *Deterministic budgeted relaxation loop (the original D13: a relaxation-planner agent + code-executed
-  axes, capped by a `DISCOVERY_MAX_CALLS` counter)* — replaced. It made catalog calls invisible in traces
-  and split retrieval logic between a planner agent and executor code; the tool-using finder is traceable
-  (a span per search) and keeps the relax decision with the agent that sees the results.
-- *Regex gate for hard-vs-soft / invented constraints* — tried and removed; the LLM should judge. (For
-  continuations, D14 sidesteps invention deterministically instead.)
-- *Workflow `.parallel()` / `.foreach()` for fan-out* — a static array / isolated iterations don't fit a
-  dynamic finder count over shared per-turn state.
-
----
-
-## D14 — "Show me more" via deterministic continuation  ·  *added 2026-06-29*
-
-**Decision:** A pure "show me more / next / others" turn is handled as a **continuation**, not a
-re-plan. The orchestrator flags `continuation: true` and emits no finders; the discover step then
-**reuses the prior turn's finder** and **excludes every already-shown product id**, paging forward. Both
-the prior finder and the shown ids are read from the **persisted assistant-message metadata** (D12) —
-the turn's finders are persisted alongside its results under a `finders` metadata key. Dedup + paging
-are plain code; the model does no id bookkeeping.
-
-**Why:** "show me more" must return the *next* products with no repeats. Letting the orchestrator
-re-plan a vague follow-up was wrong twice over: it **invented constraints** (a fabricated `$150–$500`
-band) and **repeated products** (no notion of what was already shown). Both are deterministic concerns:
-- *No repeats* — exclude shown ids (read from D12 metadata) before paginating.
-- *No re-invention* — a continuation reuses the exact prior finder, so there is nothing to re-extract or
-  fabricate; the original constraints carry forward unchanged.
-
-**Why not push "what was shown" into the orchestrator:** it never sees product ids (grounding — D13),
-and LLMs are unreliable at exact id bookkeeping across turns. Shown-id tracking is deterministic state,
-so it lives in code, seeded from the store we already write each turn.
-
-**Failure handling:** best-effort — if the flag is missed or no prior context is found, it falls back to
-a normal plan (degrades, never crashes).
-
-**Alternatives rejected:**
-- *Let the orchestrator re-plan "show me more"* — the observed behavior: invented filters + repeated
-  products.
-- *A deterministic citation check on every constraint* (model cites the user-text span; code drops
-  constraints not substring-present) — considered for the broader invented-constraints problem, but not
-  adopted; the continuation path removes the need for the common (follow-up) case without extra machinery.
-- *Server-side `skip`/offset paging* — viable (DummyJSON supports `skip`), but exclude-by-id over the
-  already-fetched window is simpler, robust to re-sorting, and reuses persisted state.
-
----
-
-## D15 — Supervisor orchestrator with a `find_products` tool  ·  *added 2026-06-29*
-
-> **Amends D13/D14.** D13's hybrid 3-step spine (`orchestrate → discover → generate`) is **replaced**
-> by a single **supervisor agent loop**. D13's *grounding-by-construction* principle and D14's
-> continuation guarantee **still stand** — they are preserved by code around the loop, not by the loop.
-
-**Decision:** Collapse the turn into one workflow step (`converseStep`) that runs a **supervisor agent**
-with a single tool, `find_products`. The supervisor *drives* the turn:
+**Decision:** Run the whole turn as one workflow step (`converseStep`) that runs a **supervisor agent**
+which *drives* the turn via grounded tools (`find_products` here; D16 adds `recommend_product` +
+`compare_products`):
 - It decides **whether** to retrieve at all. For a follow-up about products already shown ("which do you
   recommend?", "what's the difference?") it **answers directly** from conversation memory + a
-  PREVIOUSLY-SHOWN-PRODUCTS block — **no finder runs**. The old linear flow always ran discovery.
+  PREVIOUSLY-SHOWN-PRODUCTS block — **no finder runs**.
 - For a shopping request it calls `find_products` **once per angle** (multi-intent → several; an
   off-catalog ask → a few adjacent briefs it then declines honestly while merchandising). Each call
   carries a rich natural-language **brief** (the situational "why"), not just keywords.
@@ -503,17 +316,17 @@ with a single tool, `find_products`. The supervisor *drives* the turn:
   decide next steps and to write the reply — weaving **per-item reasoning into the prose** (kept in the
   message text; no per-card schema change).
 
-**Why (over D13's linear hybrid):** the orchestrator never saw results, so it couldn't *decide-and-
+**Why (over the retired D13 hybrid):** the old orchestrator never saw results, so it couldn't *decide-and-
 synthesize* (skip discovery, react to what was found, weave per-item reasoning) — and it always
 retrieved even when the answer was already on screen. A supervisor that owns the turn handles all three.
 
 **How the invariants survive going fully agentic** (the crux — the loop is agentic, the guarantees are
 code):
-- **Grounding stays structural.** `find_products` runs the *same* finder sub-agent as before (selects
-  products **by id** → code resolves real `Product`s) and **streams the cards itself** via the workflow
-  `writer` (`data-product-results` parts). The model gets only a lean view to reason over; it never
-  authors a card. The output contract (`{ message, results, chips }` + the stream parts + D12
-  rehydration) is **unchanged** — the frontend and shared schemas are untouched.
+- **Grounding stays structural.** `find_products` runs the *same* finder sub-agent (`discovery`) as the
+  retired D13 design (selects products **by id** → code resolves real `Product`s) and **streams the cards
+  itself** via the workflow `writer` (`data-product-results` parts). The model gets only a lean view to
+  reason over; it never authors a card. The output contract (`{ message, results, chips }` + the stream
+  parts + D12 rehydration) is **unchanged** — the frontend and shared schemas are untouched.
 - **Provable finder AND step caps despite an agentic loop.** Two run-local counters in `find_products`
   hard-stop the turn in code: one returns `limitReached` once `MAX_PRODUCT_FINDERS` finders have actually
   run (the catalog-cost ceiling), and one counts **every** call (including refused ones) and refuses past
@@ -522,20 +335,19 @@ code):
   `FINDER_MAX_STEPS` still bounds each inner finder.
 - **Deterministic `relaxed` + dedup + continuation.** The finder's `relaxedFactFor`/hard-constraint
   enforcement/`assembleGroups` are reused unchanged. Already-shown ids are loaded once per turn and
-  excluded from every call, so "show me more" pages forward with no repeats — D14's guarantee, now
-  enforced inside the loop rather than by a dedicated continuation step.
+  excluded from every call, so "show me more" pages forward with no repeats (the guarantee from the
+  retired D14, now enforced inside the loop rather than by a dedicated continuation step).
 
-**Roster change:** `orchestrator` + `generator` + `concierge` are retired and folded into one
-**`supervisor`** agent (it holds Memory → persists the transcript US-3.1 + learns durable preferences
-US-7.1, and writes all prose: merchandise, decline, chit-chat). `discovery` remains as the finder
-sub-agent the tool drives. Model: `gpt-5.4-mini` (judgment-heavy; nano was unreliable, per D13).
+**Roster:** one **`supervisor`** agent (holds Memory → persists the transcript US-3.1 + learns durable
+preferences US-7.1, and writes all prose: merchandise, decline, chit-chat) drives a stateless
+**`discovery`** finder sub-agent through the tool. This folds in the retired D13 `orchestrator` +
+`generator` + `concierge` roles. Model: `gpt-5.4-mini` (judgment-heavy; nano was unreliable, per D13).
 
 **Accepted costs:**
 - The supervisor's **prose** is grounded by the lean summary the tool returns (it could mis-state a
-  price in prose) — the **cards remain authoritative** (code-emitted, by id). Same guarantee level as
-  D13's generator prose.
+  price in prose) — the **cards remain authoritative** (code-emitted, by id).
 - Multi-round tool use means a turn can be a few sequential finder calls before the reply (higher
-  latency/cost than the old single fan-out) — bounded by the two caps and accepted for the
+  latency/cost than a single fan-out) — bounded by the two caps and accepted for the
   decide-and-synthesize behavior.
 
 **Alternatives rejected:**
@@ -595,3 +407,173 @@ result is a standout likely to convert — used sparingly, with the full grid st
   triples the stream/persist/rehydrate/FE plumbing for what is just products + presentation metadata.
 - *Prose-only follow-ups (status quo)* — the supervisor could already recommend/compare in text; it
   produced no focused, clickable affordance, which is exactly the conversion lever this adds.
+
+---
+
+# Outdated decisions
+
+Decisions that were in force at some point but have since been **superseded**. Kept for the record —
+they explain how the current design above was reached. Each opens with what replaced it and why.
+
+---
+
+## D2 — Explicit pipeline orchestration (not a single agent + tools)  ·  *added 2026-06-27*
+
+> **⛔ Outdated — superseded by D13, then D15.** The fixed `classify → route → retrieve → generate`
+> pipeline was replaced by a bounded **supervisor agent loop** (D15). D2's *principle* — contain
+> non-determinism behind testable seams — **survives in a new form**: it now lives in the **code around**
+> the agentic loop (grounding by id, hard finder/step caps, dedup, persistence), not in a deterministic
+> step chain. The model tier also moved to `gpt-5.4-mini` throughout (D13/D15); nano left the turn path.
+
+**Decision (original):** Layer 4 is a deterministic pipeline:
+`classify + extract → route → plan + retrieve → generate`. The LLM is used for two discrete
+sub-tasks (classify, generate); everything between is plain, testable code.
+
+**Why (at the time):** Each arrow is a testable seam, cost/latency are predictable (two LLM calls per
+turn), non-determinism is boxed into two well-defined spots, and it's straightforward to defend
+("I control every step"). Matched the assignment's "a simpler solution you fully understand."
+
+**Alternatives rejected (at the time):**
+- *Single agent loop with tools* (model decides which tools to call) — more flexible and less code
+  for open-ended flows, but non-deterministic, harder to eval, and pricier per turn.
+  > **Reversed by D15:** we *did* adopt an agent loop after all — but a **bounded** one inside a
+  > workflow shell, with grounding-by-id and hard finder/step caps enforced in code, which answers
+  > exactly these objections (non-determinism contained, eval seams preserved, cost capped).
+
+---
+
+## D13 — Agentic orchestrator + sub-agents (hybrid workflow shell)  ·  *added 2026-06-29*
+
+> **⛔ Outdated — superseded by D15 (same day).** The `orchestrate → discover → generate` three-step
+> spine and the **orchestrator / concierge / generator** trio below are **retired**, replaced by a single
+> **supervisor agent loop**. What carries forward **unchanged** into D15: the **finder sub-agent**
+> (`discovery`) with its `product_search`/`category_browse` tools, **grounding by construction**
+> (ids → real products), the cached **category provider** (list + counts injected as prompt text), and
+> the **caps** (now `MAX_PRODUCT_FINDERS` + `SUPERVISOR_MAX_STEPS` + `FINDER_MAX_STEPS`). Read this entry
+> for the rationale behind those mechanisms; read **D15** for the current shape of the turn.
+
+> **Amended D2.** D2's *principle* — a deterministic, testable spine with non-determinism boxed into
+> discrete LLM steps — still stood here. What changed at the time: the LLM seams and the retrieval step
+> became an **orchestrator + sub-agents**, and the **finder became a model-driven, tool-using agent**
+> that owns retrieval + relaxation by calling catalog search tools. The spine was still a **Mastra
+> workflow** (D7): the agent-with-tools loop was *scoped inside the single `discover` step* (bounded by
+> `FINDER_MAX_STEPS`), not a top-level supervisor that owns the whole turn.
+
+**Decision (original):** Replace `classify → route → retrieve → generate` with `orchestrate → discover →
+generate`, where each step is a deterministic workflow step that calls one specialized agent for its
+single judgment:
+- **orchestrator** — decomposes the turn (multi-intent → several "finders"), classifies
+  `product`/`chitchat`/`off_catalog`, marks hard-vs-soft constraints, and flags continuations (D14). It
+  is **category-aware**: the live catalog category list (cached, see below) is injected into its prompt,
+  so it routes against *real* categories and, for an off-catalog ask, still **merchandises** — spawning
+  finders that each target a real category slug (e.g. "flight to Tokyo" → `mobile-accessories`,
+  `sunglasses`, `womens-bags`). One planning call per turn.
+- **discovery** (the *finder* sub-agent) — runs once per finder; drives two catalog tools —
+  `product_search` (keyword) and `category_browse` (by slug) — to retrieve and, when too few match, relax
+  (broaden the keyword / browse a whole category / drop a *soft* constraint), then returns its chosen
+  products **by id** as ordered, framed groups. Code resolves ids → real products, enforces hard
+  constraints, dedups, and computes the deterministic `relaxed` fact (constraint + real catalog value).
+- **concierge** — chit-chat + the honest off-catalog decline (only when discovery returns nothing).
+- **generator** — grounded prose; held conversation memory (D4).
+
+"Sub-agents" are specialized `agent.generate()` calls invoked *from steps* (all registered as real
+Mastra agents → visible in Studio), **not** tool-call delegation.
+
+**Two-tier budget (deterministic caps):** `MAX_PRODUCT_FINDERS` (.env, default 5) caps finders/turn
+(`slice` in orchestrate — the model may propose more, only N run); `FINDER_MAX_STEPS` (.env, default 4)
+caps the tool-calling turns per finder (Mastra `maxSteps` on the finder's `.generate()` — each step is
+one LLM call + tool cycle). Worst case 5 × 4 = **20 finder tool-loops/turn**. The finder cap is the model
+ceiling (`slice`, hard); the per-finder step cap is `maxSteps` (soft — the model usually stops earlier).
+
+**Concurrent fan-out:** finders run in `Promise.all` inside the single `discover` step — *not*
+workflow-level `.parallel()`/`.foreach()`. Finder count is dynamic (1–5); `.parallel` needs a static
+step array, and `.foreach` isolates iterations and fights the per-turn shared state (categories fetched
+once, cross-finder dedup, the turn ceiling). One step scope handles dynamic N, shares that state, and
+holds the single stream writer so each group streams as its finder resolves. Finder-level tracing via
+`createChildSpan` keeps the top-level trace linear.
+
+**Categories as shared context (not a tool):** the 24 real catalog categories are fetched once and cached
+in-memory for 24h by a `CategoriesProvider` singleton (concurrent-`get()` dedup onto one in-flight
+promise; returns `[]` *uncached* on failure so the next turn retries and every consumer degrades to
+current behavior). The list is injected as **prompt text** into both the planner and the finder, so the
+model routes/keywords against real slugs. It is **never** exposed as a raw endpoint-list tool — the
+finder *retrieves* through the two scoped search tools (`product_search`, `category_browse`), and the
+category list is context it picks slugs from. *(Carried forward into D15 unchanged — the supervisor now
+consumes this context.)*
+
+**Per-category counts (one call, not 24):** each category line carries its size — `slug — name (N items)`
+— so the planner can judge how thin a category is and broaden a finder when the best-fit category holds
+only a couple of items. The counts come from a **single** `/products?limit=0&select=category` request
+(the whole 194-product catalog, category field only — ~7 KB) tallied client-side, **not** 24 per-category
+calls; it runs concurrently with the category-list fetch behind the same 24h cache (two cached calls/day
+total). Counts are a **nice-to-have**: if that one call fails, the list still serves *without* counts (the
+`(N items)` suffix is simply dropped) rather than failing the turn. *(Also carried forward into D15.)*
+
+**Grounding by construction (extends US-5.1):** the model never *authors* product data. The finder sees
+only a **lean read-only view** (id/title/price/rating/stock/…) returned by the search tools and selects
+products **by id**; code resolves those ids → real `Product` objects captured from the tool calls,
+dropping any unknown/hallucinated id. Prices, images, and the `relaxed` from/to values flow catalog →
+typed stream parts → never authored by an LLM. *(This principle is the spine of D15/D16.)*
+
+**Model selection (updated D2/D7):** the orchestrator, discovery, and concierge run on **`gpt-5.4-mini`**,
+not nano — the per-turn judgments (hard-vs-soft constraints, what *not* to invent, which axis to relax
+without drifting off-topic) are harder than "classify/extract", and nano was unreliable.
+
+**Why (over the prior deterministic flow):** the old flow returned one focused result set — it couldn't
+*merchandise*: relax a too-tight budget across several framed angles, or present adjacent items for an
+off-catalog ask (US-4.1/4.2/4.4).
+
+**Why scoped-agentic over a full supervisor (at the time):** the agentic loop was *scoped* to the finder,
+inside a single workflow step, with output grounded by code and hard constraints re-enforced outside the
+model — keeping the planner and generator as separate deterministic seams. **D15 reversed this** in favor
+of a full supervisor that owns the turn, after concluding the planner couldn't decide-and-synthesize
+without seeing results.
+
+**Alternatives rejected (at the time):**
+- *Full supervisor owning the whole turn* — rejected here for grounding/eval reasons, then **adopted in
+  D15** once grounding was shown to survive via id-based resolution + code caps *around* the loop.
+- *Deterministic budgeted relaxation loop (the original D13: a relaxation-planner agent + code-executed
+  axes)* — replaced; it made catalog calls invisible in traces and split retrieval between a planner agent
+  and executor code; the tool-using finder is traceable and keeps the relax decision with the agent that
+  sees the results.
+- *Regex gate for hard-vs-soft / invented constraints* — tried and removed; the LLM should judge.
+- *Workflow `.parallel()` / `.foreach()` for fan-out* — a static array / isolated iterations don't fit a
+  dynamic finder count over shared per-turn state.
+
+---
+
+## D14 — "Show me more" via deterministic continuation  ·  *added 2026-06-29*
+
+> **⛔ Outdated — mechanism superseded by D15.** The *guarantee* — "show me more" returns the **next**
+> products with **no repeats**, by excluding already-shown ids — **still stands**. What's gone is the
+> dedicated `continuation` flag + reused-finder step: the supervisor loop now loads every already-shown id
+> once per turn (from D12 metadata) and excludes them from **every** `find_products` call, so paging
+> forward is enforced inside the loop. Dedup is still plain code; the model still does no id bookkeeping.
+
+**Decision (original):** A pure "show me more / next / others" turn is handled as a **continuation**, not
+a re-plan. The orchestrator flags `continuation: true` and emits no finders; the discover step then
+**reuses the prior turn's finder** and **excludes every already-shown product id**, paging forward. Both
+the prior finder and the shown ids are read from the **persisted assistant-message metadata** (D12) —
+the turn's finders are persisted alongside its results under a `finders` metadata key.
+
+**Why:** "show me more" must return the *next* products with no repeats. Letting the planner re-plan a
+vague follow-up was wrong twice over: it **invented constraints** (a fabricated `$150–$500` band) and
+**repeated products** (no notion of what was already shown). Both are deterministic concerns:
+- *No repeats* — exclude shown ids (read from D12 metadata) before paginating.
+- *No re-invention* — a continuation reuses the exact prior finder, so there is nothing to re-extract or
+  fabricate; the original constraints carry forward unchanged.
+
+**Why not push "what was shown" into the model:** it never sees product ids (grounding — D13), and LLMs
+are unreliable at exact id bookkeeping across turns. Shown-id tracking is deterministic state, so it lives
+in code, seeded from the store we already write each turn. *(D15 keeps exactly this stance — the
+exclusion set is code, not a model responsibility.)*
+
+**Failure handling:** best-effort — if no prior context is found, it falls back to a normal turn
+(degrades, never crashes).
+
+**Alternatives rejected (at the time):**
+- *Let the planner re-plan "show me more"* — the observed behavior: invented filters + repeated products.
+- *A deterministic citation check on every constraint* — considered for the broader invented-constraints
+  problem, but not adopted; the continuation path removed the need for the common case.
+- *Server-side `skip`/offset paging* — viable (DummyJSON supports `skip`), but exclude-by-id over the
+  already-fetched window is simpler, robust to re-sorting, and reuses persisted state.
