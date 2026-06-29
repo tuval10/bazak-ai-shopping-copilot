@@ -514,10 +514,12 @@ code):
   `writer` (`data-product-results` parts). The model gets only a lean view to reason over; it never
   authors a card. The output contract (`{ message, results, chips }` + the stream parts + D12
   rehydration) is **unchanged** — the frontend and shared schemas are untouched.
-- **Provable finder cap despite a soft loop.** A run-local counter in `find_products` hard-stops after
-  `MAX_PRODUCT_FINDERS` (returns `limitReached` instead of running), so the per-turn finder ceiling is
-  still code-enforced. `SUPERVISOR_MAX_STEPS` bounds the supervisor's tool-turns; `FINDER_MAX_STEPS`
-  still bounds each finder.
+- **Provable finder AND step caps despite an agentic loop.** Two run-local counters in `find_products`
+  hard-stop the turn in code: one returns `limitReached` once `MAX_PRODUCT_FINDERS` finders have actually
+  run (the catalog-cost ceiling), and one counts **every** call (including refused ones) and refuses past
+  `SUPERVISOR_MAX_STEPS` tool-turns. So the supervisor cannot loop unbounded even if the framework's soft
+  `maxSteps` is ignored — the soft `maxSteps` on `.generate()` stays as a belt-and-suspenders bound.
+  `FINDER_MAX_STEPS` still bounds each inner finder.
 - **Deterministic `relaxed` + dedup + continuation.** The finder's `relaxedFactFor`/hard-constraint
   enforcement/`assembleGroups` are reused unchanged. Already-shown ids are loaded once per turn and
   excluded from every call, so "show me more" pages forward with no repeats — D14's guarantee, now
@@ -529,8 +531,6 @@ US-7.1, and writes all prose: merchandise, decline, chit-chat). `discovery` rema
 sub-agent the tool drives. Model: `gpt-5.4-mini` (judgment-heavy; nano was unreliable, per D13).
 
 **Accepted costs:**
-- The per-turn step cap is now **soft** (`maxSteps`) rather than a hard call counter — but the finder
-  cap that bounds catalog cost stays hard (the run-local counter).
 - The supervisor's **prose** is grounded by the lean summary the tool returns (it could mis-state a
   price in prose) — the **cards remain authoritative** (code-emitted, by id). Same guarantee level as
   D13's generator prose.

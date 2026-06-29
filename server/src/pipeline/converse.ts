@@ -135,6 +135,7 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
   const accumulator: ProductResultsPart[] = [];
   const usedFinders: FindProductsInput[] = [];
   const counter = { count: 0 };
+  const stepCounter = { count: 0 };
   const exclude = new Set<number>(params.context.shownIds);
 
   const tool = createFindProductsTool({
@@ -148,6 +149,8 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
     counter,
     maxFinders: params.maxFinders,
     finderMaxSteps: params.finderMaxSteps,
+    stepCounter,
+    maxSteps: params.supervisorMaxSteps,
   });
 
   const system = buildSupervisorSystem(
@@ -164,6 +167,7 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
   });
   trace(`turn DONE: ${counter.count} finder(s) ran, ${accumulator.length} group(s)`, {
     finders: counter.count,
+    steps: stepCounter.count,
     groups: accumulator.length,
   });
 

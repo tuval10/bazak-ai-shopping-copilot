@@ -36,7 +36,7 @@ const leanProductSchema = z.object({
  * streamed separately via the writer (grounding — code emits cards, not the model).
  */
 export const findProductsOutputSchema = z.object({
-  /** True when the per-turn finder cap was already hit — no finder ran. */
+  /** True when a hard per-turn cap (step or finder) was hit — no finder ran. */
   limitReached: z.boolean().optional(),
   /** Total grounded products this call surfaced (across its groups). */
   found: z.number(),
@@ -77,6 +77,14 @@ export interface FindProductsToolOptions {
   counter: { count: number };
   /** The provable per-turn finder ceiling (MAX_PRODUCT_FINDERS). */
   maxFinders: number;
+  /**
+   * Run-local step counter — incremented on EVERY call (including refused ones) to
+   * hard-cap the supervisor's tool-calling turns at `maxSteps`, independent of the
+   * framework's soft `maxSteps` on `.generate`.
+   */
+  stepCounter: { count: number };
+  /** The provable per-turn step ceiling (SUPERVISOR_MAX_STEPS). */
+  maxSteps: number;
   /** Tool-call cap for the inner finder run (FINDER_MAX_STEPS). */
   finderMaxSteps: number;
   /** Products shown per group. */
@@ -106,6 +114,18 @@ export async function runFindProducts(
   input: FindProductsInput,
   opts: FindProductsToolOptions,
 ): Promise<FindProductsOutput> {
+  // Provable step ceiling: hard-stop the agentic loop in CODE (not just the framework's
+  // soft maxSteps). Count this call before any other check — refused calls are steps too.
+  if (opts.stepCounter.count >= opts.maxSteps) {
+    return {
+      limitReached: true,
+      found: 0,
+      groups: [],
+      note: `Step limit reached (${opts.maxSteps} tool calls per turn). Stop calling find_products and write your final reply now with what you already have.`,
+    };
+  }
+  opts.stepCounter.count++;
+
   // Provable ceiling: refuse beyond MAX_PRODUCT_FINDERS even though the loop is agentic.
   if (opts.counter.count >= opts.maxFinders) {
     return {

@@ -43,6 +43,7 @@ function runTurn(opts: {
   context?: ThreadContext;
   turn?: WorkflowInput;
   maxFinders?: number;
+  supervisorMaxSteps?: number;
 }) {
   const parts: Array<{ type: string; [k: string]: unknown }> = [];
   const supervisor = scriptedSupervisor(opts.script);
@@ -56,7 +57,7 @@ function runTurn(opts: {
     writer: { custom: (d) => void parts.push(d) },
     maxFinders: opts.maxFinders ?? 5,
     finderMaxSteps: 4,
-    supervisorMaxSteps: 8,
+    supervisorMaxSteps: opts.supervisorMaxSteps ?? 8,
   }).then((result) => ({
     result,
     parts,
@@ -130,6 +131,29 @@ describe("converse — supervisor loop + grounding", () => {
     expect(productParts).toHaveLength(2); // only 2 finders ran + streamed
     expect(result.results).toHaveLength(2);
     expect(limitHits).toBe(2); // the 3rd + 4th calls were refused
+  });
+
+  it("hard step cap → find_products refuses past SUPERVISOR_MAX_STEPS regardless of finder room", async () => {
+    let limitHits = 0;
+    const { productParts } = await runTurn({
+      supervisorMaxSteps: 2, // fewer steps than finders available
+      maxFinders: 10, // plenty of finder room — the STEP cap is what bites
+      deps: catalogByKeyword({
+        k0: [makeProduct({ id: 1 })],
+        k1: [makeProduct({ id: 2 })],
+        k2: [makeProduct({ id: 3 })],
+        k3: [makeProduct({ id: 4 })],
+      }),
+      script: async (find) => {
+        for (let i = 0; i < 4; i++) {
+          const r = await find({ label: `f${i}`, keywords: `k${i}` });
+          if (r.limitReached) limitHits++;
+        }
+        return "done";
+      },
+    });
+    expect(productParts).toHaveLength(2); // only 2 steps ran a finder + streamed
+    expect(limitHits).toBe(2); // the 3rd + 4th calls were refused by the step cap
   });
 
   it("continuation → already-shown ids excluded from the streamed group (no repeats)", async () => {
