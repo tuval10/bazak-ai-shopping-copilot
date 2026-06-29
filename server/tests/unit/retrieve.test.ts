@@ -7,7 +7,7 @@ import { makeListResponse, makeProduct } from "../helpers/products";
  * `fetchForIntent` (endpoint selection — keyword search vs category browse) and
  * `filtersFor` (intent → catalog filter mapping). The relaxation/notes behavior
  * that used to live in `runRetrieve` is now the discovery agent's job and is
- * covered in `evals/agentic-flow.test.ts`.
+ * covered by the LLM-judge evals (`evals/llm-judge.eval.ts`, run via `npm run eval`).
  */
 
 function depsWith(overrides: Partial<CatalogDeps> = {}): CatalogDeps {

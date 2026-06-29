@@ -1,4 +1,9 @@
-import { type Product, type ProductResultsPart, PRODUCT_RESULTS_PART_TYPE } from "@bazak/shared";
+import {
+  type Product,
+  type ProductResultsPart,
+  PRODUCT_RESULTS_PART_TYPE,
+  type ToolCallRecord,
+} from "@bazak/shared";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { type Category } from "../../catalog";
@@ -93,6 +98,11 @@ export interface FindProductsToolOptions {
   stepCounter: { count: number };
   /** The provable per-turn step ceiling (SUPERVISOR_MAX_STEPS). */
   maxSteps: number;
+  /**
+   * EVAL-ONLY (optional): a shared sink that records every tool call (incl. refused
+   * ones) so an LLM-judge can grade tool usage. Unused in production.
+   */
+  toolCalls?: ToolCallRecord[];
   /** Tool-call cap for the inner finder run (FINDER_MAX_STEPS). */
   finderMaxSteps: number;
   /** Products shown per group. */
@@ -203,6 +213,14 @@ export function createFindProductsTool(opts: FindProductsToolOptions) {
       "when the user only asks about products already shown — answer those directly.",
     inputSchema: findProductsInputSchema,
     outputSchema: findProductsOutputSchema,
-    execute: async (input: FindProductsInput) => runFindProducts(input, opts),
+    execute: async (input: FindProductsInput) => {
+      const out = await runFindProducts(input, opts);
+      opts.toolCalls?.push({
+        tool: "find_products",
+        args: input,
+        outcome: out.limitReached ? "limitReached" : out.found ? "ok" : "empty",
+      });
+      return out;
+    },
   });
 }

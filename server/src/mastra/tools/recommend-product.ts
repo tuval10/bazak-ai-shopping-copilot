@@ -1,4 +1,9 @@
-import { type Product, type ProductResultsPart, PRODUCT_RESULTS_PART_TYPE } from "@bazak/shared";
+import {
+  type Product,
+  type ProductResultsPart,
+  PRODUCT_RESULTS_PART_TYPE,
+  type ToolCallRecord,
+} from "@bazak/shared";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { PartWriter } from "../../pipeline/generate";
@@ -34,6 +39,8 @@ export interface RecommendProductToolOptions {
   stepCounter: { count: number };
   /** The provable per-turn step ceiling (SUPERVISOR_MAX_STEPS). */
   maxSteps: number;
+  /** EVAL-ONLY (optional): shared sink recording every call for an LLM-judge. */
+  toolCalls?: ToolCallRecord[];
 }
 
 const BADGE_INTENT: Record<RecommendProductInput["badge"], string> = {
@@ -95,6 +102,14 @@ export function createRecommendProductTool(opts: RecommendProductToolOptions) {
       "were actually shown.",
     inputSchema: recommendProductInputSchema,
     outputSchema: recommendProductOutputSchema,
-    execute: async (input: RecommendProductInput) => runRecommendProduct(input, opts),
+    execute: async (input: RecommendProductInput) => {
+      const out = await runRecommendProduct(input, opts);
+      opts.toolCalls?.push({
+        tool: "recommend_product",
+        args: input,
+        outcome: out.notFound ? "notFound" : "ok",
+      });
+      return out;
+    },
   });
 }

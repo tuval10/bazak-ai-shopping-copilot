@@ -1,4 +1,9 @@
-import { type Product, type ProductResultsPart, PRODUCT_RESULTS_PART_TYPE } from "@bazak/shared";
+import {
+  type Product,
+  type ProductResultsPart,
+  PRODUCT_RESULTS_PART_TYPE,
+  type ToolCallRecord,
+} from "@bazak/shared";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { PartWriter } from "../../pipeline/generate";
@@ -34,6 +39,8 @@ export interface CompareProductsToolOptions {
   stepCounter: { count: number };
   /** The provable per-turn step ceiling (SUPERVISOR_MAX_STEPS). */
   maxSteps: number;
+  /** EVAL-ONLY (optional): shared sink recording every call for an LLM-judge. */
+  toolCalls?: ToolCallRecord[];
 }
 
 /**
@@ -93,6 +100,14 @@ export function createCompareProductsTool(opts: CompareProductsToolOptions) {
       "user automatically. Only use ids that were actually shown.",
     inputSchema: compareProductsInputSchema,
     outputSchema: compareProductsOutputSchema,
-    execute: async (input: CompareProductsInput) => runCompareProducts(input, opts),
+    execute: async (input: CompareProductsInput) => {
+      const out = await runCompareProducts(input, opts);
+      opts.toolCalls?.push({
+        tool: "compare_products",
+        args: input,
+        outcome: out.notFound ? "notFound" : "ok",
+      });
+      return out;
+    },
   });
 }

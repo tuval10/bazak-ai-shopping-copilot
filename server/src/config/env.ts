@@ -28,6 +28,13 @@ export interface ServerEnv {
    * still hard-caps actual finder runs at `maxProductFinders` regardless of this.
    */
   supervisorMaxSteps: number;
+  /**
+   * EVAL-ONLY: when true, the converse step attaches the turn's trace (`finders` +
+   * `toolCalls`) to the workflow output so an LLM-judge can grade which tools the
+   * agent chose. Off in production (the user-facing output stays lean). Set by the
+   * `npm run eval` command via `EVAL_EXPOSE_TRACE=1`.
+   */
+  evalExposeTrace: boolean;
 }
 
 /** Parse a positive integer env var, falling back to `fallback` when unset/invalid. */
@@ -56,5 +63,6 @@ export function loadEnv(): ServerEnv {
     maxProductFinders: parsePositiveInt(process.env.MAX_PRODUCT_FINDERS, 5),
     finderMaxSteps: parsePositiveInt(process.env.FINDER_MAX_STEPS, 4),
     supervisorMaxSteps: parsePositiveInt(process.env.SUPERVISOR_MAX_STEPS, 8),
+    evalExposeTrace: process.env.EVAL_EXPOSE_TRACE === "1",
   };
 }

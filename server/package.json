@@ -9,6 +9,7 @@
     "dev": "mastra dev",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
+    "eval": "EVAL_EXPOSE_TRACE=1 vitest run --config vitest.eval.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@mastra/evals": "^1.5.0",
     "@types/node": "^22.0.0",
     "mastra": "^1.16.0",
     "typescript": "^5.7.0",

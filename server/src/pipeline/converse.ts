@@ -3,6 +3,7 @@ import {
   type ProductResultsPart,
   RESULTS_METADATA_KEY,
   type SuggestionChip,
+  type ToolCallRecord,
   type WorkflowInput,
   workflowInputSchema,
   workflowOutputSchema,
@@ -131,6 +132,11 @@ export interface ConverseResult {
   chips: SuggestionChip[];
   /** The finders the supervisor actually ran — persisted for a later "show me more". */
   finders: SearchIntent[];
+  /**
+   * Every supervisor tool call this turn (find/recommend/compare, incl. refused),
+   * in order — for EVAL grading of tool usage. Not persisted, not user-facing.
+   */
+  toolCalls: ToolCallRecord[];
 }
 
 /**
@@ -144,6 +150,8 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
   const deps = params.deps ?? defaultDeps;
   const accumulator: ProductResultsPart[] = [];
   const usedFinders: FindProductsInput[] = [];
+  // EVAL trace: every tool call this turn (find/recommend/compare, incl. refused), in order.
+  const toolCalls: ToolCallRecord[] = [];
   const counter = { count: 0 };
   const stepCounter = { count: 0 };
   const exclude = new Set<number>(params.context.shownIds);
@@ -165,6 +173,7 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
     finderMaxSteps: params.finderMaxSteps,
     stepCounter,
     maxSteps: params.supervisorMaxSteps,
+    toolCalls,
   });
 
   const recommendTool = createRecommendProductTool({
@@ -173,6 +182,7 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
     accumulator,
     stepCounter,
     maxSteps: params.supervisorMaxSteps,
+    toolCalls,
   });
 
   const compareTool = createCompareProductsTool({
@@ -181,6 +191,7 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
     accumulator,
     stepCounter,
     maxSteps: params.supervisorMaxSteps,
+    toolCalls,
   });
 
   const system = buildSupervisorSystem(
@@ -208,7 +219,7 @@ export async function runConverse(params: ConverseParams): Promise<ConverseResul
   });
 
   const chips = await buildChips(accumulator, params.input.message, params.chipsAgent);
-  return { message: text, results: accumulator, chips, finders: usedFinders };
+  return { message: text, results: accumulator, chips, finders: usedFinders, toolCalls };
 }
 
 /**
@@ -296,6 +307,11 @@ export const converseStep = createStep({
       });
     }
 
-    return { message: result.message, results: result.results, chips: result.chips };
+    const output = { message: result.message, results: result.results, chips: result.chips };
+    // EVAL-ONLY: surface the turn's trace so an LLM-judge can grade tool usage. Gated by
+    // EVAL_EXPOSE_TRACE so production turns return only the lean user-facing shape above.
+    return env.evalExposeTrace
+      ? { ...output, finders: result.finders, toolCalls: result.toolCalls }
+      : output;
   },
 });
