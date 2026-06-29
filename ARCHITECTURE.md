@@ -315,7 +315,16 @@ surfaced as a raw DB error (US-5.2).
 - **Bounded agency** — the supervisor loop can't run away: `MAX_PRODUCT_FINDERS`, `SUPERVISOR_MAX_STEPS`,
   and `FINDER_MAX_STEPS` cap it in code regardless of model behavior (§5, D15).
 - **Observability** — Mastra Studio + OpenTelemetry give step/agent/tool-level traces of each run; a
-  PinoLogger (`@mastra/loggers`, `LOG_LEVEL`-gated) feeds evaluation (US-6.1, D13).
+  PinoLogger (`@mastra/loggers`, `LOG_LEVEL`-gated) carries structured per-turn logs (D7).
+- **Testing & evaluation (US-6.1)** — on the ESM-native stack (D10): **Vitest** on `shared`/`server` and
+  **Jest + RTL** on `frontend` cover the pure, injectable seams (a turn runs with fake agents, no model
+  calls). On top, a **Mastra LLM-as-judge eval suite** (`server/evals/`, `npm run eval`) drives each
+  scenario through the **real `pipeline`** (real supervisor + finder + live catalog) in an **isolated,
+  in-memory Mastra instance** — never the prod DB — then grades the turn's trace (reply + tool calls +
+  cards) with an **independent, stronger judge** (`gpt-5.4` vs the system's `gpt-5.4-mini`, to avoid
+  self-eval bias) via Mastra's `createScorer` / `@mastra/evals`. It scores **behaviour, not inventory**
+  (correct tool choice, grounding, honest declines), with deterministic zero-LLM tool-usage checks
+  alongside; slow (real models), so kept out of `npm test`.
 
 ---
 
@@ -333,17 +342,5 @@ surfaced as a raw DB error (US-5.2).
 | Host | Mastra server (built bundle) + standalone Next.js client | D1, D9, D11 |
 | Catalog | DummyJSON Products API | — |
 | Validation | Zod via `@bazak/shared` (server emits, client re-validates) | D11 |
-| Observability | Mastra Studio + OpenTelemetry + PinoLogger | D7, D13 |
-
----
-
-## 11. Open items (not yet ADR'd)
-
-- *(resolved)* **Host framework** — settled: a standalone **Mastra server** (built bundle) owns the API,
-  and the frontend is a **separate client-only Next.js app** on `@mastra/client-js` (D8, D9, D11). The two
-  are fully decoupled; there is no FE backend.
-- *(resolved)* **Test / eval tooling** — Vitest on `shared`/`server` (D10), Jest + RTL on `frontend`
-  (D11); Epic 4 edge cases run as server evals.
-- *(resolved)* **Orchestration shape** — settled on the bounded supervisor loop (D15) with
-  recommend/compare display variants (D16), superseding the earlier deterministic pipeline (D2) and the
-  orchestrator-+-sub-agents hybrid (D13).
+| Observability | Mastra Studio + OpenTelemetry + PinoLogger | D7 |
+| Testing / eval | Vitest (`shared`/`server`) + Jest/RTL (`frontend`); Mastra LLM-judge evals (`server/evals`, `npm run eval`) | D10 |
