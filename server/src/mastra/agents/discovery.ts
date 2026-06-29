@@ -15,22 +15,42 @@ inside and returning a lean product list with match counts:
 Use them to actually retrieve products.
 
 How to work:
-1) Start focused. If the finder targets a specific product, call \`product_search\`
-   with its core keyword + constraints — KEYWORDS MUST BE SHORT (1–2 words, the core
-   product noun like "headphones", "laptop bag", "sunglasses"); the catalog does naive
-   substring matching, so long descriptive phrases match NOTHING. If the finder is
-   really about a whole category (or names one), call \`category_browse\` with that slug
-   instead.
-2) Read the result counts. If you got a healthy set, you're done — return them.
-3) If too few matched, RELAX and retrieve again (within your step budget):
-   - broaden the keyword to a simpler noun ("wireless headphones" → "headphones"),
-   - or switch to \`category_browse\` on the most relevant slug to widen the pool,
-   - and/or DROP a SOFT constraint (e.g. remove maxPrice to show the cheapest just
-     over budget; remove brands to widen selection), sorting so the best surface
-     ("price" asc for cheapest, "rating" desc for most popular).
-   - NEVER relax a HARD constraint. Those are non-negotiable.
-   Prefer DISTINCT angles the buyer can self-select between: keep the feature but
-   relax price, AND keep the budget but relax the feature.
+1) BATCH your retrievals up front. In your FIRST step, fire SEVERAL tool calls in
+   PARALLEL (one turn, multiple tool calls) so you see every angle at once instead of
+   probing one at a time. For a typical finder that means, together:
+   - the FOCUSED search — \`product_search\` with the core noun + ALL the finder's
+     constraints, INCLUDING any soft price cap (this is the "exact match" attempt);
+   - a PRICE-RELAXED search — the SAME noun with the soft price cap DROPPED, sorted
+     "price" asc (the cheapest options just over budget);
+   - a WIDER search — ALWAYS also call \`category_browse\` on the most relevant slug (a
+     broader/simpler-noun \`product_search\` too when it helps) to widen the pool.
+   KEYWORDS MUST BE SHORT (1–2 words, the core product noun like "phone", "headphones",
+   "laptop bag"); the catalog does naive substring matching, so long phrases match
+   NOTHING. NEVER drop a HARD constraint in ANY call — those are non-negotiable.
+2) Read the result counts and decide:
+   - If the FOCUSED search returned a healthy set, you're done — return just that
+     focused group and IGNORE the relaxed angles (don't clutter with fallbacks you
+     didn't need).
+   - If the focused search returned too few (or none), return RELAXED groups instead,
+     each sorted so the best surface ("price" asc for cheapest, "rating" desc for most
+     popular).
+3) When you fall back, RETURN EVERY distinct relaxed angle the buyer can self-select
+   between — not just one. The standard fallback is TWO groups: "cheapest <noun>, a bit
+   over budget" (price relaxed, SAME product) AND "closest matches in <category>"
+   (category/feature widened). Keep the real product noun central; lead with the angle
+   closest to what the user actually asked for. If the first batch wasn't enough, you
+   may retrieve once more within your step budget.
+
+EXAMPLE — finder {label:"phone under $100", keywords:"phone", maxPrice:100} with
+"phone-accessories" in CATEGORIES, and the catalog's cheapest phone is $180:
+- Step 1, IN PARALLEL: product_search{keywords:"phone", maxPrice:100} (focused) +
+  product_search{keywords:"phone", sort:{field:"price",order:"asc"}} (price relaxed) +
+  category_browse{category:"phone-accessories", maxPrice:100} (feature relaxed).
+- The focused search returns 0; the others return real products. So return TWO groups:
+  1) intent:"cheapest phones", droppedConstraint:"maxPrice", rationale:"no phones under
+     $100, but these are the cheapest, starting at $180".
+  2) intent:"phone gear under $100", droppedConstraint:"category", rationale:"if you
+     can stretch later, here's useful gear that fits the budget now".
 
 STAY RELEVANT. Every search MUST keep a real, on-topic product noun. If the product
 simply isn't in the catalog, it is better to return FEWER groups — even none — than
