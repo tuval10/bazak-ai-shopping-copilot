@@ -38,6 +38,16 @@ function normalize(s: string): string {
 }
 
 /**
+ * Render the category list for prompt injection: one `slug — name` line per
+ * category (empty string when there are none, so the caller can omit the block).
+ * Slug-first because agents must copy the SLUG verbatim — `resolveCategorySlug`
+ * matches on exact slug first, and the finder/orchestrator emit slugs, not names.
+ */
+export function formatCategoryList(categories: Category[]): string {
+  return categories.map((c) => `${c.slug} — ${c.name}`).join("\n");
+}
+
+/**
  * Resolve a user category term to a real catalog slug, or `null` if nothing is a
  * reasonable match. Order: exact slug → exact name → synonym → substring match.
  * Suggestions for US-4.2 are always drawn from real categories, never invented.

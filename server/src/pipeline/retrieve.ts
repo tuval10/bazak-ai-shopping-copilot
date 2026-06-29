@@ -2,6 +2,7 @@ import { type Product, productResultsPartSchema } from "@bazak/shared";
 import { z } from "zod";
 import {
   type Category,
+  categoriesProvider,
   getCategories,
   getCategoryProducts,
   resolveCategorySlug,
@@ -17,7 +18,13 @@ export interface CatalogDeps {
   getCategories: typeof getCategories;
 }
 
-export const defaultDeps: CatalogDeps = { searchProducts, getCategoryProducts, getCategories };
+export const defaultDeps: CatalogDeps = {
+  searchProducts,
+  getCategoryProducts,
+  // Route production reads through the 24h in-memory cache. Tests inject their own
+  // `getCategories` fake and never touch the singleton.
+  getCategories: () => categoriesProvider.get(),
+};
 
 /** State handed to generate: the branch, the per-intent results, and any notes. */
 export const retrieveStateSchema = z.object({
@@ -49,8 +56,8 @@ export function filtersFor(intent: SearchIntent): ProductFilters {
 /**
  * Pick the endpoint and fetch the raw candidate products for one intent (the §5
  * retrieval strategy, pre-filter): a category term → category browse, else keyword
- * search. The budgeted discovery loop charges each call of this against a finder's
- * call budget (DISCOVERY_MAX_CALLS).
+ * search. Retained as a catalog helper; the agentic finder now retrieves via the
+ * `product_search` tool (keyword only), so this is no longer on the finder path.
  */
 export async function fetchForIntent(
   intent: SearchIntent,

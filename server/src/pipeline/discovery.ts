@@ -8,82 +8,88 @@ import {
 import type { Mastra } from "@mastra/core";
 import { createStep } from "@mastra/core/workflows";
 import { z } from "zod";
-import { type Category, filterProducts } from "../catalog";
-import { type SortField, paginate, sortProducts } from "../catalog/sort";
+import {
+  type Category,
+  filterProducts,
+  formatCategoryList,
+  paginate,
+  type ProductFilters,
+  type SortField,
+  sortProducts,
+} from "../catalog";
 import { loadEnv } from "../config/env";
+import { createCategoryBrowseTool, createProductSearchTool } from "../mastra/tools/search-products";
 import { logger } from "../observability/logger";
 import {
   type ConstraintKey,
-  constraintKeySchema,
   FINDERS_METADATA_KEY,
   type OrchestrationPlan,
   orchestrationPlanSchema,
   type SearchIntent,
   searchIntentSchema,
-  sortPrefSchema,
 } from "./classification";
 import {
   type CatalogDeps,
   defaultDeps,
-  fetchForIntent,
   filtersFor,
   type RetrieveState,
   retrieveStateSchema,
 } from "./retrieve";
 import { looseSchema } from "./step-schema";
 
-/**
- * How many matches a focused query needs to be considered "strong" — at or above
- * this we show that group and stop (offer filter chips instead of relaxing). Below
- * it, discovery plans relaxation axes. One tuned knob (plan: STRONG_RESULT).
- */
-export const STRONG_RESULT = 3;
-
 /** Structured trace for the concurrent finder fan-out (visible at LOG_LEVEL=debug). */
 const trace = (msg: string, fields: Record<string, unknown> = {}) => {
   logger.debug(`discovery ${msg}`, { component: "discovery", ...fields });
 };
 
-/** One relaxation move the discovery agent proposes for a weak finder (US-4.4). */
-export const relaxationAxisSchema = z.object({
-  /** A single SOFT constraint to drop (e.g. "maxPrice"). */
-  drop: constraintKeySchema.optional(),
-  /** Alternative/broader keywords to search instead. */
-  keywords: z.string().optional(),
-  /** Alternative category to browse instead. */
-  category: z.string().optional(),
-  /** How to order this angle so the best options surface. */
-  sort: sortPrefSchema.optional(),
-  /** Short persuasive pitch for the resulting group (model-authored). */
-  rationale: z.string(),
+/** One product group the finder agent selected (by id) for a single angle (US-4.4). */
+export const finderGroupSchema = z.object({
+  /** Short label for this group, e.g. "cheapest wireless". */
+  intent: z.string(),
+  /** Ids the agent chose for THIS group — must come from a `product_search` result. */
+  productIds: z.array(z.number()).default([]),
+  /** Model-authored pitch for the group's trade-off. */
+  rationale: z.string().optional(),
+  /** The SOFT constraint this group exists by relaxing (omitted for the focused group). */
+  droppedConstraint: z
+    .enum(["minPrice", "maxPrice", "minRating", "brands", "inStockOnly", "onSaleOnly", "category"])
+    .optional(),
 });
 
-export type RelaxationAxis = z.infer<typeof relaxationAxisSchema>;
+export type FinderGroup = z.infer<typeof finderGroupSchema>;
 
-/** The discovery agent's structured fallback plan: ordered relaxation axes. */
-export const discoveryPlanSchema = z.object({
-  axes: z.array(relaxationAxisSchema).max(4).default([]),
+/** The finder agent's structured output: ordered product groups (best first). */
+export const finderResultSchema = z.object({
+  groups: z.array(finderGroupSchema).default([]),
 });
 
-export type DiscoveryPlan = z.infer<typeof discoveryPlanSchema>;
+export type FinderResult = z.infer<typeof finderResultSchema>;
 
-/** Minimal structural view of the discovery agent (injectable for tests). */
-export interface StructuredDiscovery {
+/**
+ * Minimal structural view of the agentic finder (injectable for tests). It is given
+ * the `product_search` tool per-run via `toolsets` and a `maxSteps` cap, and returns
+ * the selected groups as structured output.
+ */
+export interface AgenticFinder {
   generate(
-    message: string,
-    options: { structuredOutput: { schema: typeof discoveryPlanSchema } },
+    prompt: string,
+    options: {
+      structuredOutput: { schema: typeof finderResultSchema };
+      toolsets?: Record<string, Record<string, unknown>>;
+      maxSteps?: number;
+    },
   ): Promise<{ object: unknown }>;
 }
 
 export interface DiscoveryOptions {
   /** Products shown per group. */
   limit?: number;
-  /** Products fetched before client-side filter/sort. */
+  /** Products fetched per `product_search` call before client-side filter/sort. */
   fetchSize?: number;
-  /** Matches at/above which a focused query is "strong" (no relaxation). */
-  strongResult?: number;
-  /** Catalog API calls a single finder may make (DISCOVERY_MAX_CALLS). */
-  maxCalls?: number;
+  /** Products a single `product_search` call returns to the agent. */
+  toolLimit?: number;
+  /** Max tool-calling turns per finder run (FINDER_MAX_STEPS). */
+  maxSteps?: number;
   /**
    * Product ids already shown earlier in this thread — excluded from every group
    * so a "show me more" continuation pages forward without repeats. Deterministic
@@ -95,94 +101,30 @@ export interface DiscoveryOptions {
 type ResolvedOptions = {
   limit: number;
   fetchSize: number;
-  strongResult: number;
-  maxCalls: number;
+  toolLimit: number;
+  maxSteps: number;
   exclude: Set<number>;
 };
 
-/** A budget of catalog API calls for one finder. Decremented on each fetch. */
-interface CallBudget {
-  remaining: number;
-}
-
-/** A group before pagination/dedup: its sorted matches plus framing. */
-interface RawGroup {
-  intent: string;
-  sorted: Product[];
-  rationale?: string;
-  relaxed?: RelaxedConstraint;
-}
-
-/** Fetch for an intent, charging the finder's budget. Returns null when exhausted. */
-async function chargedFetch(
-  intent: SearchIntent,
-  deps: CatalogDeps,
-  categories: Category[],
-  budget: CallBudget,
-  fetchSize: number,
-): Promise<Product[] | null> {
-  if (budget.remaining <= 0) return null;
-  budget.remaining -= 1;
-  return fetchForIntent(intent, deps, categories, fetchSize);
-}
-
-/** Which constraints are actually set on a finder. */
-function activeConstraints(finder: SearchIntent): ConstraintKey[] {
-  const keys: ConstraintKey[] = [];
-  if (finder.minPrice !== undefined) keys.push("minPrice");
-  if (finder.maxPrice !== undefined) keys.push("maxPrice");
-  if (finder.minRating !== undefined) keys.push("minRating");
-  if (finder.brands?.length) keys.push("brands");
-  if (finder.category) keys.push("category");
-  if (finder.inStockOnly) keys.push("inStockOnly");
-  if (finder.onSaleOnly) keys.push("onSaleOnly");
-  return keys;
-}
-
-/** Active constraints minus the ones the user marked hard — the relaxable set. */
-function softConstraints(finder: SearchIntent): ConstraintKey[] {
+/** A finder's HARD constraints as a filter — always enforced, never relaxed. */
+function hardFiltersFor(finder: SearchIntent): ProductFilters {
   const hard = new Set(finder.hardConstraints ?? []);
-  return activeConstraints(finder).filter((k) => !hard.has(k));
+  const all = filtersFor(finder);
+  const out: ProductFilters = {};
+  if (hard.has("minPrice")) out.minPrice = all.minPrice;
+  if (hard.has("maxPrice")) out.maxPrice = all.maxPrice;
+  if (hard.has("minRating")) out.minRating = all.minRating;
+  if (hard.has("brands")) out.brands = all.brands;
+  if (hard.has("inStockOnly")) out.inStockOnly = all.inStockOnly;
+  if (hard.has("onSaleOnly")) out.onSaleOnly = all.onSaleOnly;
+  return out;
 }
 
-/** The soft-only view of a finder handed to the discovery agent (hard ones stripped). */
-function softView(finder: SearchIntent): Record<string, unknown> {
-  const soft = new Set(softConstraints(finder));
-  const v: Record<string, unknown> = { label: finder.label };
-  if (finder.keywords) v.keywords = finder.keywords;
-  if (finder.sort) v.sort = finder.sort;
-  if (soft.has("category") && finder.category) v.category = finder.category;
-  if (soft.has("minPrice")) v.minPrice = finder.minPrice;
-  if (soft.has("maxPrice")) v.maxPrice = finder.maxPrice;
-  if (soft.has("minRating")) v.minRating = finder.minRating;
-  if (soft.has("brands")) v.brands = finder.brands;
-  if (soft.has("inStockOnly")) v.inStockOnly = finder.inStockOnly;
-  if (soft.has("onSaleOnly")) v.onSaleOnly = finder.onSaleOnly;
-  return v;
-}
-
-/** Build the discovery-agent prompt from the soft view + the focused outcome. */
-function buildDiscoveryPrompt(finder: SearchIntent, fetched: Product[], matched: number): string {
-  const outcome =
-    fetched.length === 0
-      ? `The focused query returned 0 products from the catalog.`
-      : `${matched} of ${fetched.length} fetched matched. Closest available: cheapest $${Math.min(
-          ...fetched.map((p) => p.price),
-        )}, best rating ${Math.max(...fetched.map((p) => p.rating)).toFixed(1)}.`;
-  const soft = softConstraints(finder);
-  return [
-    "Finder (only soft, relaxable constraints are shown):",
-    JSON.stringify(softView(finder)),
-    `Soft constraints you may drop: ${soft.length ? soft.join(", ") : "none — broaden via keywords/category instead"}.`,
-    "",
-    outcome,
-    "",
-    "Propose relaxation axes (best first).",
-  ].join("\n");
-}
-
-/** The deterministic `relaxed` fact for a dropped constraint, from real catalog data. */
-function relaxedFact(
+/**
+ * The deterministic `relaxed` fact for a group whose soft constraint was dropped,
+ * computed from the REAL products shown (never model-authored — the badge can't lie).
+ */
+function relaxedFactFor(
   finder: SearchIntent,
   key: ConstraintKey,
   pool: Product[],
@@ -190,25 +132,13 @@ function relaxedFact(
   switch (key) {
     case "maxPrice":
       if (finder.maxPrice === undefined || pool.length === 0) return undefined;
-      return {
-        constraint: "maxPrice",
-        from: `under $${finder.maxPrice}`,
-        to: `$${Math.min(...pool.map((p) => p.price))}`,
-      };
+      return { constraint: "maxPrice", from: `under $${finder.maxPrice}`, to: `$${Math.min(...pool.map((p) => p.price))}` };
     case "minPrice":
       if (finder.minPrice === undefined || pool.length === 0) return undefined;
-      return {
-        constraint: "minPrice",
-        from: `over $${finder.minPrice}`,
-        to: `$${Math.max(...pool.map((p) => p.price))}`,
-      };
+      return { constraint: "minPrice", from: `over $${finder.minPrice}`, to: `$${Math.max(...pool.map((p) => p.price))}` };
     case "minRating":
       if (finder.minRating === undefined || pool.length === 0) return undefined;
-      return {
-        constraint: "minRating",
-        from: `${finder.minRating}★ and up`,
-        to: `${Math.max(...pool.map((p) => p.rating)).toFixed(1)}★`,
-      };
+      return { constraint: "minRating", from: `${finder.minRating}★ and up`, to: `${Math.max(...pool.map((p) => p.rating)).toFixed(1)}★` };
     case "brands":
       if (!finder.brands?.length) return undefined;
       return { constraint: "brands", from: finder.brands.join(", "), to: "other brands" };
@@ -220,138 +150,134 @@ function relaxedFact(
       return finder.category
         ? { constraint: "category", from: finder.category, to: "a broader search" }
         : undefined;
-    default:
-      return undefined;
   }
 }
 
-/** Run one relaxation axis → a raw group (sorted, unpaginated), or null if it's empty/over budget. */
-async function runAxis(
-  finder: SearchIntent,
-  axis: RelaxationAxis,
-  focusedPool: Product[],
-  deps: CatalogDeps,
-  categories: Category[],
-  budget: CallBudget,
-  opts: ResolvedOptions,
-): Promise<RawGroup | null> {
-  const derived: SearchIntent = { ...finder };
-  if (axis.keywords) derived.keywords = axis.keywords;
-  if (axis.category) derived.category = axis.category;
-  if (axis.sort) derived.sort = axis.sort;
-  if (axis.drop === "category") derived.category = undefined;
-
-  // A dropped filter constraint reuses the already-fetched pool (no call). A new
-  // keyword/category requires a fresh, budgeted fetch.
-  let pool = focusedPool;
-  if (axis.keywords || axis.category) {
-    const fetched = await chargedFetch(derived, deps, categories, budget, opts.fetchSize);
-    if (!fetched) return null;
-    pool = fetched;
-  }
-
-  let filters = filtersFor(derived);
-  if (axis.drop) filters = { ...filters, [axis.drop]: undefined };
-  const relaxed = axis.drop ? relaxedFact(finder, axis.drop, pool) : undefined;
-
-  const matched = filterProducts(pool, filters);
-  if (matched.length === 0) return null;
-  const sorted = sortProducts(matched, derived.sort?.field as SortField | undefined, derived.sort?.order);
-  return { intent: finder.label, sorted, rationale: axis.rationale, relaxed };
+/** Build the finder-agent prompt: the finder + which constraints are hard + the real categories. */
+export function buildFinderPrompt(finder: SearchIntent, categories: Category[]): string {
+  const hard = finder.hardConstraints ?? [];
+  const catBlock = categories.length
+    ? [
+        "",
+        "CATALOG CATEGORIES (real category slugs — keyword-search a noun, or browse a whole slug):",
+        formatCategoryList(categories),
+      ]
+    : [];
+  return [
+    "Find products for this finder:",
+    JSON.stringify(finder),
+    `HARD constraints (never relax these): ${hard.length ? hard.join(", ") : "none"}.`,
+    ...catBlock,
+    "",
+    "Use `product_search` (by keyword) or `category_browse` (by slug) to retrieve, relax if too few, and return the best groups.",
+  ].join("\n");
 }
 
-/** Run one finder: focused query, then (if weak) budgeted relaxation fan-out. */
-async function runFinder(
+/**
+ * Assemble the deterministic result groups from the agent's id-based selection:
+ * resolve ids → REAL products via the run registry (dropping unknown/hallucinated
+ * ids), re-enforce hard constraints, exclude already-shown ids, dedup across the
+ * finder's groups, paginate, and compute the deterministic `relaxed` fact.
+ */
+export function assembleGroups(
   finder: SearchIntent,
-  deps: CatalogDeps,
-  categories: Category[],
-  discovery: StructuredDiscovery,
-  opts: ResolvedOptions,
-): Promise<ProductResultsPart[]> {
-  const budget: CallBudget = { remaining: opts.maxCalls };
-  trace(`finder START "${finder.label}"`);
-
-  const all = await chargedFetch(finder, deps, categories, budget, opts.fetchSize);
-  if (!all) return [];
-  const matched = filterProducts(all, filtersFor(finder));
-  const focusedSorted = sortProducts(
-    matched,
-    finder.sort?.field as SortField | undefined,
-    finder.sort?.order,
-  );
-
-  // Strong result → show it, no relaxation (filter chips offered downstream).
-  // On a continuation turn, opts.exclude drops already-shown ids so we page forward.
-  if (matched.length >= opts.strongResult) {
-    const products = paginate(
-      focusedSorted.filter((p) => !opts.exclude.has(p.id)),
-      opts.limit,
-    );
-    trace(`finder "${finder.label}" STRONG (${matched.length} matched) → no relaxation`);
-    return products.length === 0 ? [] : [{ intent: finder.label, products }];
-  }
-
-  // Weak → ask the discovery agent for relaxation axes, then execute within budget.
-  trace(`finder "${finder.label}" WEAK (${matched.length} matched) → planning relaxation`);
-  const plan = discoveryPlanSchema.parse(
-    (await discovery.generate(buildDiscoveryPrompt(finder, all, matched.length), {
-      structuredOutput: { schema: discoveryPlanSchema },
-    })).object,
-  );
-  trace(`finder "${finder.label}" → ${plan.axes.length} axes, fanning out within budget`);
-
-  const raw: RawGroup[] = [];
-  if (matched.length > 0) raw.push({ intent: finder.label, sorted: focusedSorted });
-
-  const hard = new Set(finder.hardConstraints ?? []);
-  for (const axis of plan.axes) {
-    if (budget.remaining <= 0 && (axis.keywords || axis.category)) continue;
-    if (axis.drop && hard.has(axis.drop)) continue; // defense-in-depth: never drop a hard constraint
-    const group = await runAxis(finder, axis, all, deps, categories, budget, opts);
-    if (group) raw.push(group);
-  }
-
-  // Dedupe products across this finder's groups, then paginate each. Seeding with
-  // opts.exclude also drops anything already shown earlier in the thread (continuation).
+  groups: FinderGroup[],
+  registry: Map<number, Product>,
+  opts: { limit: number; exclude: Set<number> },
+): ProductResultsPart[] {
+  const hardFilters = hardFiltersFor(finder);
   const seen = new Set<number>(opts.exclude);
   const out: ProductResultsPart[] = [];
-  for (const g of raw) {
-    const products = paginate(
-      g.sorted.filter((p) => !seen.has(p.id)),
-      opts.limit,
-    );
+
+  for (const g of groups) {
+    // Resolve ids → real products, in the order the model listed them. Drop unknown ids.
+    const resolved = g.productIds.map((id) => registry.get(id)).filter((p): p is Product => p !== undefined);
+    // Defensive: hard constraints can never be relaxed, even if the model returned a violator.
+    const safe = filterProducts(resolved, hardFilters);
+    const fresh = safe.filter((p) => !seen.has(p.id));
+    const products = paginate(fresh, opts.limit);
     if (products.length === 0) continue;
     for (const p of products) seen.add(p.id);
+
+    const relaxed = g.droppedConstraint ? relaxedFactFor(finder, g.droppedConstraint, products) : undefined;
     out.push({
-      intent: g.intent,
+      intent: g.intent || finder.label,
       products,
       ...(g.rationale ? { rationale: g.rationale } : {}),
-      ...(g.relaxed ? { relaxed: g.relaxed } : {}),
+      ...(relaxed ? { relaxed } : {}),
     });
   }
-  trace(`finder DONE "${finder.label}" → ${out.length} groups, ${opts.maxCalls - budget.remaining} catalog calls used`);
   return out;
 }
 
 /**
- * Budgeted, agentic product discovery (the "sub-agent" brain). For each finder:
- * focused query first; if weak, the discovery agent proposes relaxation axes and we
- * fan them out within the per-finder call budget, returning several merchandised
- * groups (US-4.4). Finders run concurrently; each gets its own DISCOVERY_MAX_CALLS.
- * Non-product/off-catalog finders are retrieved identically — declining honestly is
- * the generator's job (off-catalog merchandising); only an all-empty result declines.
+ * Run one finder agentically: hand the agent a run-local `product_search` tool
+ * (bound to a grounding registry) and let it search + relax within `maxSteps`, then
+ * assemble its id-based selection into grounded, deduped, paginated groups.
+ */
+async function runFinder(
+  finder: SearchIntent,
+  agent: AgenticFinder,
+  deps: CatalogDeps,
+  categories: Category[],
+  opts: ResolvedOptions,
+): Promise<ProductResultsPart[]> {
+  trace(`finder START "${finder.label}"`);
+  const registry = new Map<number, Product>();
+  const enforcedFilters = hardFiltersFor(finder);
+  // Both retrieval tools share ONE run-local registry so ids from either grounds.
+  const searchTool = createProductSearchTool({
+    registry,
+    search: deps.searchProducts,
+    fetchSize: opts.fetchSize,
+    defaultLimit: opts.toolLimit,
+    enforcedFilters,
+  });
+  const browseTool = createCategoryBrowseTool({
+    registry,
+    browse: deps.getCategoryProducts,
+    categories,
+    fetchSize: opts.fetchSize,
+    defaultLimit: opts.toolLimit,
+    enforcedFilters,
+  });
+
+  let parsed: FinderResult;
+  try {
+    const result = await agent.generate(buildFinderPrompt(finder, categories), {
+      structuredOutput: { schema: finderResultSchema },
+      toolsets: { catalog: { product_search: searchTool, category_browse: browseTool } },
+      maxSteps: opts.maxSteps,
+    });
+    parsed = finderResultSchema.parse(result.object);
+  } catch (err) {
+    trace(`finder "${finder.label}" FAILED`, { err: err instanceof Error ? err.message : String(err) });
+    return [];
+  }
+
+  const groups = assembleGroups(finder, parsed.groups, registry, { limit: opts.limit, exclude: opts.exclude });
+  trace(`finder DONE "${finder.label}" → ${groups.length} groups, ${registry.size} products seen`);
+  return groups;
+}
+
+/**
+ * Agentic product discovery. Each finder runs as a tool-using agent that drives
+ * `product_search` to retrieve + relax (replacing the old deterministic budgeted
+ * loop), returning grounded groups. Finders run concurrently; each gets its own
+ * grounding registry and `maxSteps` budget. Non-product/off-catalog finders are
+ * retrieved identically — declining honestly is the generator's job.
  */
 export async function runDiscovery(
   plan: OrchestrationPlan,
   deps: CatalogDeps = defaultDeps,
-  discovery?: StructuredDiscovery,
+  finder?: AgenticFinder,
   options: DiscoveryOptions = {},
 ): Promise<RetrieveState> {
   const opts: ResolvedOptions = {
     limit: options.limit ?? 5,
     fetchSize: options.fetchSize ?? 100,
-    strongResult: options.strongResult ?? STRONG_RESULT,
-    maxCalls: options.maxCalls ?? Number.POSITIVE_INFINITY,
+    toolLimit: options.toolLimit ?? 10,
+    maxSteps: options.maxSteps ?? 4,
     exclude: new Set(options.excludeIds ?? []),
   };
 
@@ -359,26 +285,21 @@ export async function runDiscovery(
     return { kind: plan.kind, results: [], notes: [], finders: [] };
   }
 
-  // A no-op discovery agent for the happy path / tests that never relax.
-  const agent: StructuredDiscovery =
-    discovery ?? { generate: async () => ({ object: { axes: [] } }) };
+  // A no-op finder for tests/paths that never inject one — yields no products.
+  const agent: AgenticFinder = finder ?? { generate: async () => ({ object: { groups: [] } }) };
 
-  const needsCategories = plan.finders.some((f) => f.category);
-  const categories = needsCategories ? await deps.getCategories() : [];
+  // Category list is injected into each finder's prompt (cached via the provider).
+  const categories = await deps.getCategories();
 
   trace(`fan-out: ${plan.finders.length} finders concurrently (kind=${plan.kind})`, {
     event: "fanout_start",
     finders: plan.finders.length,
     kind: plan.kind,
   });
-  const perFinder = await Promise.all(
-    plan.finders.map((f) => runFinder(f, deps, categories, agent, opts)),
-  );
+  const perFinder = await Promise.all(plan.finders.map((f) => runFinder(f, agent, deps, categories, opts)));
   const groups = perFinder.flat();
-  trace(`fan-out complete: ${groups.length} total groups`, {
-    event: "fanout_done",
-    groups: groups.length,
-  });
+  trace(`fan-out complete: ${groups.length} total groups`, { event: "fanout_done", groups: groups.length });
+
   // Carry the finders forward so the turn can persist them (reused by a later
   // "show me more" continuation).
   return { kind: plan.kind, results: groups, notes: [], finders: plan.finders };
@@ -426,15 +347,15 @@ async function loadContinuationContext(
   }
 }
 
-/** Workflow step wrapper: pulls the discovery agent + budget from Mastra/env. */
+/** Workflow step wrapper: pulls the finder agent + step cap from Mastra/env. */
 export const discoverStep = createStep({
   id: "discover",
   inputSchema: looseSchema(orchestrationPlanSchema),
   outputSchema: looseSchema(retrieveStateSchema),
   execute: async ({ inputData, mastra, getInitData }) => {
     const plan = orchestrationPlanSchema.parse(inputData);
-    const discovery = mastra.getAgent("discovery") as unknown as StructuredDiscovery;
-    const maxCalls = loadEnv().discoveryMaxCalls;
+    const agent = mastra.getAgent("discovery") as unknown as AgenticFinder;
+    const maxSteps = loadEnv().finderMaxSteps;
 
     // "Show me more": reuse the prior finder + page past already-shown products,
     // rather than re-planning (which would re-extract — or invent — constraints).
@@ -442,15 +363,13 @@ export const discoverStep = createStep({
       const { threadId, resourceId } = workflowInputSchema.parse(getInitData());
       const { priorFinders, shownIds } = await loadContinuationContext(mastra, threadId, resourceId);
       if (priorFinders.length > 0) {
-        trace(
-          `continuation: reusing ${priorFinders.length} prior finder(s), excluding ${shownIds.length} shown id(s)`,
-        );
+        trace(`continuation: reusing ${priorFinders.length} prior finder(s), excluding ${shownIds.length} shown id(s)`);
         const reused: OrchestrationPlan = { kind: "product", finders: priorFinders, continuation: true };
-        return runDiscovery(reused, defaultDeps, discovery, { maxCalls, excludeIds: shownIds });
+        return runDiscovery(reused, defaultDeps, agent, { maxSteps, excludeIds: shownIds });
       }
       trace("continuation requested but no prior context found → planning fresh");
     }
 
-    return runDiscovery(plan, defaultDeps, discovery, { maxCalls });
+    return runDiscovery(plan, defaultDeps, agent, { maxSteps });
   },
 });

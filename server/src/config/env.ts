@@ -17,10 +17,11 @@ export interface ServerEnv {
    */
   maxProductFinders: number;
   /**
-   * Max catalog API calls a single finder may make across its focused query +
-   * relaxation fan-out. Worst case per turn = maxProductFinders × discoveryMaxCalls.
+   * Max tool-calling turns the agentic finder may take per finder run (its
+   * `product_search` calls + the final structured answer). Bounds cost/latency.
+   * Worst case per turn ≈ maxProductFinders × finderMaxSteps tool calls.
    */
-  discoveryMaxCalls: number;
+  finderMaxSteps: number;
 }
 
 /** Parse a positive integer env var, falling back to `fallback` when unset/invalid. */
@@ -47,6 +48,6 @@ export function loadEnv(): ServerEnv {
     openaiApiKey: process.env.OPENAI_API_KEY ?? "",
     databaseUrl,
     maxProductFinders: parsePositiveInt(process.env.MAX_PRODUCT_FINDERS, 5),
-    discoveryMaxCalls: parsePositiveInt(process.env.DISCOVERY_MAX_CALLS, 10),
+    finderMaxSteps: parsePositiveInt(process.env.FINDER_MAX_STEPS, 4),
   };
 }

@@ -10,10 +10,14 @@ Given the current message (and recent conversation, if provided), decide:
 1) kind:
    - "product"     — a shopping request the catalog might fulfil.
    - "chitchat"    — a greeting or small talk; no shopping intent.
-   - "off_catalog" — a shopping-shaped request the catalog likely can't fulfil
-     directly (e.g. "a flight to Tokyo"). STILL propose finders for adjacent items
-     we might sell (flight comfort: travel pillow, neck rest; luggage; adapters;
-     noise-cancelling headphones). We decline honestly but still merchandise.
+   - "off_catalog" — a shopping-shaped request the catalog can't fulfil directly
+     (e.g. "a flight to Tokyo"). DECLINE HONESTLY but STILL MERCHANDISE: hypothesize
+     what THIS buyer plausibly needs for that situation, and spawn a few finders that
+     EACH target a REAL category from the CATALOG CATEGORIES block below. E.g. "flight
+     to Tokyo" → noise-cancelling headphones (category: mobile-accessories),
+     sunglasses (category: sunglasses), a travel bag (category: womens-bags). Every
+     off_catalog finder MUST carry a category slug copied VERBATIM from that list —
+     we stay grounded in real inventory while declining the literal request.
 
 2) finders — one search per angle to pursue:
    - Multi-intent ("a phone AND a laptop bag") → one finder per item.
@@ -46,13 +50,20 @@ Given the current message (and recent conversation, if provided), decide:
    new product or constraint ("show me cheaper", "any from Apple?", "a laptop bag
    too"), continuation is FALSE — plan it as a normal finder. Default is FALSE.
 
+CATEGORIES. The prompt below lists the catalog's real categories (slug — name).
+Whenever you set a finder's category, it MUST be one of those EXACT slugs (copy it
+verbatim — never invent or guess a slug, never use a display name). If no listed
+category clearly fits a normal product finder, leave category unset and rely on
+short keywords. For an off_catalog request, by contrast, EVERY finder must carry a
+real slug from the list (that is how we merchandise honestly).
+
 NEVER INVENT CONSTRAINTS. Only set minPrice / maxPrice / minRating / brands /
 inStockOnly / onSaleOnly / category when the USER actually expressed them. If the
 user gave no budget, leave price unset; no rating ask, leave minRating unset; etc.
 Inventing a price ceiling or rating floor silently filters out real products and is
 a bug. For a vague or off-catalog request ("a flight to Tokyo"), the finders should
-carry ONLY short keywords (and a category only if you're confident it's a real
-catalog category) — no fabricated price/rating bounds.
+carry short keywords and a real category slug (per the CATEGORIES rule above) — but
+NO fabricated price/rating bounds.
 
 Be decisive: for a vague request, still produce a best-guess finder rather than
 refusing. Keep the number of finders small (a handful at most).`;

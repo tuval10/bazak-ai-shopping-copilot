@@ -1,27 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OrchestrationPlan } from "../../src/pipeline/classification";
 import { generateChips } from "../../src/pipeline/chips";
-import {
-  type DiscoveryPlan,
-  type StructuredDiscovery,
-  runDiscovery,
-} from "../../src/pipeline/discovery";
+import { type AgenticFinder, runDiscovery } from "../../src/pipeline/discovery";
 import { summarizeForPrompt } from "../../src/pipeline/generate";
-import { runOrchestrate, type StructuredOrchestrator } from "../../src/pipeline/orchestrate";
+import {
+  buildOrchestratePrompt,
+  runOrchestrate,
+  type StructuredOrchestrator,
+} from "../../src/pipeline/orchestrate";
 import type { CatalogDeps } from "../../src/pipeline/retrieve";
+import { scriptedFinder } from "../helpers/finder";
 import { makeListResponse, makeProduct } from "../helpers/products";
 
 /**
- * Evals for the agentic flow (orchestrator → budgeted discovery → chips). Drives the
+ * Evals for the agentic flow (orchestrator → agentic finder → chips). Drives the
  * real planning/retrieval functions with faked agents + a mocked catalog, asserting
- * the deterministic guarantees the interview will probe: the finder cap, soft vs hard
- * relaxation, the per-finder call budget, and data-grounded chips.
+ * the deterministic guarantees the interview will probe: the finder cap, grounding
+ * (id → real product), hard-constraint enforcement, dedup/continuation, and chips.
  */
 
 const fakeOrchestrator = (plan: OrchestrationPlan): StructuredOrchestrator => ({
-  generate: vi.fn(async () => ({ object: plan })),
-});
-const fakeDiscovery = (plan: DiscoveryPlan): StructuredDiscovery => ({
   generate: vi.fn(async () => ({ object: plan })),
 });
 function catalog(products = [makeProduct()], overrides: Partial<CatalogDeps> = {}): CatalogDeps {
@@ -51,6 +49,21 @@ describe("orchestrate — planning + finder cap", () => {
     expect(plan.finders[0]?.keywords).toBe("something cool");
   });
 
+  it("injects the catalog category list into the orchestrator prompt", async () => {
+    const orchestrator = fakeOrchestrator({ kind: "product", finders: [] });
+    await runOrchestrate("flight to tokyo", orchestrator, {
+      categoryList: "smartphones — smartphones\nsunglasses — sunglasses",
+    });
+    const [prompt] = (orchestrator.generate as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
+    expect(prompt).toContain("CATALOG CATEGORIES");
+    expect(prompt).toContain("sunglasses — sunglasses");
+    expect(prompt).toContain("flight to tokyo");
+  });
+
+  it("buildOrchestratePrompt returns the bare message with no context/categories", () => {
+    expect(buildOrchestratePrompt("hello")).toBe("hello");
+  });
+
   it("passes a continuation through untouched — no backfill, flag preserved", async () => {
     // "show me more" → continuation:true with no finders. Must NOT be backfilled
     // into a literal "show me more" finder (discovery reuses the prior finder).
@@ -63,35 +76,77 @@ describe("orchestrate — planning + finder cap", () => {
   });
 });
 
-describe("discovery — strong vs weak", () => {
-  it("strong focused result → one group, no relaxation, discovery agent never called", async () => {
+describe("discovery — agentic finder grounding", () => {
+  it("focused search → one group of REAL products resolved by id (grounding)", async () => {
     const deps = catalog([makeProduct({ id: 1 }), makeProduct({ id: 2 }), makeProduct({ id: 3 })]);
-    const discovery = fakeDiscovery({ axes: [] });
+    const finder = scriptedFinder(async (search) => {
+      const r = await search({ keywords: "phone" });
+      return { groups: [{ intent: "phones", productIds: r.products.map((p) => p.id) }] };
+    });
     const state = await runDiscovery(
       { kind: "product", finders: [{ label: "phones", keywords: "phone" }] },
       deps,
-      discovery,
-      { maxCalls: 10 },
+      finder,
     );
     expect(state.results).toHaveLength(1);
+    expect(state.results[0]?.products.map((p) => p.id)).toEqual([1, 2, 3]);
     expect(state.results[0]?.relaxed).toBeUndefined();
-    expect(discovery.generate).not.toHaveBeenCalled();
   });
 
-  it("weak + SOFT maxPrice → relaxed group naming the constraint + the real value (US-4.4)", async () => {
-    // Nothing under $100; cheapest available is $110.
-    const deps = catalog([
-      makeProduct({ id: 1, price: 110 }),
-      makeProduct({ id: 2, price: 140 }),
-    ]);
-    const discovery = fakeDiscovery({
-      axes: [{ drop: "maxPrice", sort: { field: "price", order: "asc" }, rationale: "closest just above budget" }],
+  it("category_browse → group of REAL products resolved by id (browse-tool grounding)", async () => {
+    const deps = catalog([makeProduct({ id: 4 }), makeProduct({ id: 5 })], {
+      getCategories: vi.fn(async () => [{ slug: "laptops", name: "laptops" }]),
+    });
+    // The finder ignores keyword search and browses the whole category slug instead.
+    const finder = scriptedFinder(async (_search, _finder, browse) => {
+      const r = await browse({ category: "laptops" });
+      return { groups: [{ intent: "laptops", productIds: r.products.map((p) => p.id) }] };
+    });
+    const state = await runDiscovery(
+      { kind: "product", finders: [{ label: "laptops", category: "laptops" }] },
+      deps,
+      finder,
+    );
+    expect(deps.getCategoryProducts).toHaveBeenCalledWith("laptops", expect.anything());
+    expect(state.results[0]?.products.map((p) => p.id)).toEqual([4, 5]);
+  });
+
+  it("ids the search never returned are dropped (no hallucinated products)", async () => {
+    const deps = catalog([makeProduct({ id: 1 }), makeProduct({ id: 2 })]);
+    const finder = scriptedFinder(async (search) => {
+      await search({ keywords: "phone" }); // registry now holds 1, 2
+      return { groups: [{ intent: "phones", productIds: [1, 2, 999] }] }; // 999 was never returned
+    });
+    const state = await runDiscovery(
+      { kind: "product", finders: [{ label: "phones", keywords: "phone" }] },
+      deps,
+      finder,
+    );
+    expect(state.results[0]?.products.map((p) => p.id)).toEqual([1, 2]); // 999 dropped
+  });
+
+  it("a relaxed SOFT maxPrice → group names the constraint + the real value (US-4.4)", async () => {
+    // Nothing under $100; cheapest available is $110. The finder drops the soft ceiling.
+    const deps = catalog([makeProduct({ id: 1, price: 110 }), makeProduct({ id: 2, price: 140 })]);
+    const finder = scriptedFinder(async (search) => {
+      const focused = await search({ keywords: "wireless", maxPrice: 100 }); // 0 matched
+      expect(focused.matched).toBe(0);
+      const relaxed = await search({ keywords: "wireless", sort: { field: "price", order: "asc" } });
+      return {
+        groups: [
+          {
+            intent: "closest just above budget",
+            productIds: relaxed.products.map((p) => p.id),
+            rationale: "a little above $100, but the closest options",
+            droppedConstraint: "maxPrice",
+          },
+        ],
+      };
     });
     const state = await runDiscovery(
       { kind: "product", finders: [{ label: "wireless under $100", keywords: "wireless", maxPrice: 100 }] },
       deps,
-      discovery,
-      { maxCalls: 10 },
+      finder,
     );
     const relaxed = state.results.find((r) => r.relaxed);
     expect(relaxed).toBeDefined();
@@ -102,10 +157,14 @@ describe("discovery — strong vs weak", () => {
     expect(relaxed?.rationale).toBeTruthy();
   });
 
-  it("HARD maxPrice ('strictly under $100') is never relaxed → empty → decline", async () => {
+  it("HARD maxPrice is enforced INSIDE the tool — over-budget items are never returned", async () => {
     const deps = catalog([makeProduct({ id: 1, price: 110 }), makeProduct({ id: 2, price: 130 })]);
-    // Even if the agent tries to drop maxPrice, code re-validates it out.
-    const discovery = fakeDiscovery({ axes: [{ drop: "maxPrice", rationale: "tries to relax" }] });
+    // Even though the finder ignores the cap and searches without maxPrice, the tool
+    // enforces the hard constraint, so nothing over $100 is ever surfaced.
+    const finder = scriptedFinder(async (search) => {
+      const r = await search({ keywords: "headphones" }); // no maxPrice passed by the model
+      return { groups: [{ intent: "headphones", productIds: r.products.map((p) => p.id) }] };
+    });
     const state = await runDiscovery(
       {
         kind: "product",
@@ -114,51 +173,9 @@ describe("discovery — strong vs weak", () => {
         ],
       },
       deps,
-      discovery,
-      { maxCalls: 10 },
+      finder,
     );
     expect(state.results).toHaveLength(0); // no group breached the hard cap
-  });
-});
-
-describe("discovery — budget enforcement", () => {
-  it("a finder makes at most DISCOVERY_MAX_CALLS catalog calls", async () => {
-    const searchProducts = vi.fn(async () => makeListResponse([])); // always empty → keeps trying
-    const deps = catalog([], { searchProducts });
-    const discovery = fakeDiscovery({
-      axes: [
-        { keywords: "a", rationale: "a" },
-        { keywords: "b", rationale: "b" },
-        { keywords: "c", rationale: "c" },
-        { keywords: "d", rationale: "d" },
-      ],
-    });
-    await runDiscovery(
-      { kind: "product", finders: [{ label: "x", keywords: "x" }] },
-      deps,
-      discovery,
-      { maxCalls: 2 },
-    );
-    // focused (1) + at most one keyword axis (1) = 2; budget stops the rest.
-    expect(searchProducts.mock.calls.length).toBeLessThanOrEqual(2);
-  });
-
-  it("per-turn ceiling holds: finders × maxCalls bounds total catalog calls", async () => {
-    const searchProducts = vi.fn(async () => makeListResponse([]));
-    const deps = catalog([], { searchProducts });
-    const discovery = fakeDiscovery({
-      axes: [
-        { keywords: "a", rationale: "a" },
-        { keywords: "b", rationale: "b" },
-      ],
-    });
-    const finders = [
-      { label: "f1", keywords: "k1" },
-      { label: "f2", keywords: "k2" },
-      { label: "f3", keywords: "k3" },
-    ];
-    await runDiscovery({ kind: "product", finders }, deps, discovery, { maxCalls: 10 });
-    expect(searchProducts.mock.calls.length).toBeLessThanOrEqual(finders.length * 10);
   });
 });
 
@@ -170,11 +187,15 @@ describe("discovery — continuation / show me more", () => {
       makeProduct({ id: i + 1, price: (i + 1) * 10 }),
     );
     const deps = catalog(products);
+    const finder = scriptedFinder(async (search) => {
+      const r = await search({ keywords: "phone", sort: { field: "price", order: "asc" }, limit: 20 });
+      return { groups: [{ intent: "phones", productIds: r.products.map((p) => p.id) }] };
+    });
     const state = await runDiscovery(
       { kind: "product", finders: [{ label: "phones", keywords: "phone", sort: { field: "price", order: "asc" } }] },
       deps,
-      fakeDiscovery({ axes: [] }),
-      { maxCalls: 10, limit: 5, excludeIds: [1, 2, 3, 4, 5] },
+      finder,
+      { limit: 5, excludeIds: [1, 2, 3, 4, 5] },
     );
     const ids = state.results.flatMap((r) => r.products.map((p) => p.id));
     expect(ids).toEqual([6, 7, 8]); // the next page, none of the already-shown 1-5
@@ -182,11 +203,14 @@ describe("discovery — continuation / show me more", () => {
 
   it("returns the finders it ran so the turn can persist them for the next continuation", async () => {
     const deps = catalog([makeProduct({ id: 1 }), makeProduct({ id: 2 }), makeProduct({ id: 3 })]);
+    const finder = scriptedFinder(async (search) => {
+      const r = await search({ keywords: "phone" });
+      return { groups: [{ intent: "phones", productIds: r.products.map((p) => p.id) }] };
+    });
     const state = await runDiscovery(
       { kind: "product", finders: [{ label: "phones", keywords: "phone", maxPrice: 500 }] },
       deps,
-      fakeDiscovery({ axes: [] }),
-      { maxCalls: 10 },
+      finder,
     );
     expect(state.finders).toHaveLength(1);
     expect(state.finders?.[0]?.keywords).toBe("phone");
@@ -196,11 +220,15 @@ describe("discovery — continuation / show me more", () => {
   it("yields no group when every matching product was already shown (exhausted)", async () => {
     const products = [makeProduct({ id: 1 }), makeProduct({ id: 2 }), makeProduct({ id: 3 })];
     const deps = catalog(products);
+    const finder = scriptedFinder(async (search) => {
+      const r = await search({ keywords: "phone", limit: 20 });
+      return { groups: [{ intent: "phones", productIds: r.products.map((p) => p.id) }] };
+    });
     const state = await runDiscovery(
       { kind: "product", finders: [{ label: "phones", keywords: "phone" }] },
       deps,
-      fakeDiscovery({ axes: [] }),
-      { maxCalls: 10, excludeIds: [1, 2, 3] },
+      finder,
+      { excludeIds: [1, 2, 3] },
     );
     expect(state.results).toHaveLength(0);
   });
@@ -209,11 +237,14 @@ describe("discovery — continuation / show me more", () => {
 describe("discovery — off-catalog merchandising", () => {
   it("retrieves adjacent finders for an off_catalog turn (still merchandises)", async () => {
     const deps = catalog([makeProduct({ id: 1 }), makeProduct({ id: 2 }), makeProduct({ id: 3 })]);
+    const finder = scriptedFinder(async (search) => {
+      const r = await search({ keywords: "pillow" });
+      return { groups: [{ intent: "travel pillow", productIds: r.products.map((p) => p.id) }] };
+    });
     const state = await runDiscovery(
-      { kind: "off_catalog", finders: [{ label: "travel pillow", keywords: "travel pillow" }] },
+      { kind: "off_catalog", finders: [{ label: "travel pillow", keywords: "pillow" }] },
       deps,
-      fakeDiscovery({ axes: [] }),
-      { maxCalls: 10 },
+      finder,
     );
     expect(state.kind).toBe("off_catalog");
     expect(state.results[0]?.products.length).toBeGreaterThan(0);

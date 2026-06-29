@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Category, resolveCategorySlug } from "../../src/catalog/categories";
+import { type Category, formatCategoryList, resolveCategorySlug } from "../../src/catalog/categories";
 
 const categories: Category[] = [
   { slug: "smartphones", name: "smartphones" },
@@ -37,5 +37,19 @@ describe("resolveCategorySlug", () => {
 
   it("returns null for empty input", () => {
     expect(resolveCategorySlug("", categories)).toBeNull();
+  });
+});
+
+describe("formatCategoryList", () => {
+  it("renders one 'slug — name' line per category", () => {
+    const out = formatCategoryList([
+      { slug: "smartphones", name: "smartphones" },
+      { slug: "mens-watches", name: "mens watches" },
+    ]);
+    expect(out).toBe("smartphones — smartphones\nmens-watches — mens watches");
+  });
+
+  it("returns an empty string for no categories", () => {
+    expect(formatCategoryList([])).toBe("");
   });
 });

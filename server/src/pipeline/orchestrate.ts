@@ -1,6 +1,7 @@
 import { workflowInputSchema } from "@bazak/shared";
 import type { Mastra } from "@mastra/core";
 import { createStep } from "@mastra/core/workflows";
+import { categoriesProvider, formatCategoryList } from "../catalog";
 import { loadEnv } from "../config/env";
 import { type OrchestrationPlan, orchestrationPlanSchema, type SearchIntent } from "./classification";
 import { looseSchema } from "./step-schema";
@@ -34,19 +35,42 @@ export interface StructuredOrchestrator {
 }
 
 /**
- * Builds the orchestrator prompt. With prior-turn context (US-4.5) it frames the
+ * Builds the orchestrator prompt. Injects the live catalog category list (so the
+ * orchestrator plans against REAL categories — `product` vs `off_catalog`, and
+ * which slug each finder targets) and, with prior-turn context (US-4.5), frames the
  * recent conversation so an implicit refinement ("show me cheaper", "the second
  * one") can be rewritten into a full, standalone finder.
+ *
+ * `categoryList` is the pre-formatted `slug — name` block (may be "" when the
+ * catalog fetch failed); when both it and `priorContext` are absent the prompt is
+ * just the bare message (preserves the simple call sites + tests).
  */
-export function buildOrchestratePrompt(message: string, priorContext?: string): string {
-  if (!priorContext) return message;
-  return [
-    "Recent conversation (use it to resolve follow-ups like \"show me cheaper\" or",
-    '"the second one" into a complete, standalone finder):',
-    priorContext,
-    "",
-    `Current message: ${message}`,
-  ].join("\n");
+export function buildOrchestratePrompt(
+  message: string,
+  priorContext?: string,
+  categoryList?: string,
+): string {
+  if (!priorContext && !categoryList) return message;
+  const blocks: string[] = [];
+  if (categoryList) {
+    blocks.push(
+      "CATALOG CATEGORIES — the catalog's real categories (slug — name). Use these",
+      "EXACT slugs for any finder's `category`. For an off_catalog request, pick the",
+      "closest real slug for each merchandising finder:",
+      categoryList,
+      "",
+    );
+  }
+  if (priorContext) {
+    blocks.push(
+      'Recent conversation (use it to resolve follow-ups like "show me cheaper" or',
+      '"the second one" into a complete, standalone finder):',
+      priorContext,
+      "",
+    );
+  }
+  blocks.push(`Current message: ${message}`);
+  return blocks.join("\n");
 }
 
 /**
@@ -59,10 +83,10 @@ export function buildOrchestratePrompt(message: string, priorContext?: string): 
 export async function runOrchestrate(
   message: string,
   orchestrator: StructuredOrchestrator,
-  options: { priorContext?: string; maxFinders?: number } = {},
+  options: { priorContext?: string; maxFinders?: number; categoryList?: string } = {},
 ): Promise<OrchestrationPlan> {
   const result = await orchestrator.generate(
-    buildOrchestratePrompt(message, options.priorContext),
+    buildOrchestratePrompt(message, options.priorContext, options.categoryList),
     { structuredOutput: { schema: orchestrationPlanSchema } },
   );
   const parsed = orchestrationPlanSchema.parse(result.object);
@@ -131,8 +155,12 @@ export const orchestrateStep = createStep({
     const { message, threadId, resourceId } = workflowInputSchema.parse(inputData);
     const agent = mastra.getAgent("orchestrator") as unknown as StructuredOrchestrator;
     const priorContext = await recentTurnsDigest(mastra, threadId, resourceId);
+    // The live category list grounds planning (off_catalog detection + real slugs).
+    // `get()` never throws → "" on a fetch miss → the block is simply omitted.
+    const categoryList = formatCategoryList(await categoriesProvider.get());
     return runOrchestrate(message, agent, {
       priorContext,
+      categoryList,
       maxFinders: loadEnv().maxProductFinders,
     });
   },

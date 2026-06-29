@@ -1,15 +1,12 @@
 import type { WorkflowInput } from "@bazak/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { OrchestrationPlan } from "../../src/pipeline/classification";
-import {
-  type DiscoveryPlan,
-  runDiscovery,
-  type StructuredDiscovery,
-} from "../../src/pipeline/discovery";
+import { type AgenticFinder, runDiscovery } from "../../src/pipeline/discovery";
 import { PRODUCT_RESULTS_PART, type TextGenerator } from "../../src/pipeline/generate";
 import { runGenerate, summarizeForPrompt } from "../../src/pipeline/generate";
 import { runOrchestrate, type StructuredOrchestrator } from "../../src/pipeline/orchestrate";
 import type { CatalogDeps } from "../../src/pipeline/retrieve";
+import { passthroughFinder, scriptedFinder } from "../helpers/finder";
 import { makeListResponse, makeProduct } from "../helpers/products";
 
 /**
@@ -26,13 +23,9 @@ const input: WorkflowInput = { message: "x", threadId: "t", resourceId: "local-u
 const fakeOrchestrator = (plan: OrchestrationPlan): StructuredOrchestrator => ({
   generate: vi.fn(async () => ({ object: plan })),
 });
-const fakeDiscovery = (plan: DiscoveryPlan): StructuredDiscovery => ({
-  generate: vi.fn(async () => ({ object: plan })),
-});
 const fakeGenerator = (): TextGenerator => ({ generate: vi.fn(async () => ({ text: "reply" })) });
 
-// A "strong" catalog: ≥ STRONG_RESULT cheap products, so a focused query shows them
-// as-is without triggering relaxation.
+// A few cheap products a focused keyword query finds as-is (no relaxation needed).
 function catalog(
   products = [
     makeProduct({ id: 1, price: 20 }),
@@ -52,10 +45,10 @@ async function run(
   plan: OrchestrationPlan,
   deps = catalog(),
   turn: WorkflowInput = input,
-  discovery?: StructuredDiscovery,
+  finder: AgenticFinder = passthroughFinder(),
 ) {
   const orchestrated = await runOrchestrate(turn.message, fakeOrchestrator(plan));
-  const state = await runDiscovery(orchestrated, deps, discovery, { maxCalls: 10 });
+  const state = await runDiscovery(orchestrated, deps, finder);
   const gen = fakeGenerator();
   const parts: Array<{ type: string }> = [];
   const output = await runGenerate({
@@ -105,16 +98,27 @@ describe("Epic 4 edge cases", () => {
   });
 
   it("no results → relax a SOFT constraint and name it + the real value (US-4.4)", async () => {
-    // Nothing under $100; cheapest available is $110. Discovery drops the soft ceiling.
+    // Nothing under $100; cheapest available is $110. The finder drops the soft ceiling.
     const deps = catalog([makeProduct({ id: 1, price: 110 }), makeProduct({ id: 2, price: 140 })]);
-    const discovery = fakeDiscovery({
-      axes: [{ drop: "maxPrice", sort: { field: "price", order: "asc" }, rationale: "closest above budget" }],
+    const finder = scriptedFinder(async (search) => {
+      await search({ keywords: "phone", maxPrice: 100 }); // 0 matched
+      const relaxed = await search({ keywords: "phone", sort: { field: "price", order: "asc" } });
+      return {
+        groups: [
+          {
+            intent: "closest above budget",
+            productIds: relaxed.products.map((p) => p.id),
+            rationale: "closest above budget",
+            droppedConstraint: "maxPrice",
+          },
+        ],
+      };
     });
     const { state } = await run(
       { kind: "product", finders: [{ label: "phone under $100", keywords: "phone", maxPrice: 100 }] },
       deps,
       input,
-      discovery,
+      finder,
     );
     const relaxed = state.results.find((r) => r.relaxed);
     expect(relaxed?.products.length).toBeGreaterThan(0); // nearest alternatives shown

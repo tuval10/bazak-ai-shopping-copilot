@@ -343,18 +343,25 @@ exact groups that were shown is both faithful and free at read time.
 
 > **Amends D2.** D2's *principle* — a deterministic, testable spine with non-determinism boxed into
 > discrete LLM steps — **still stands**. What changes: the LLM seams and the retrieval step become an
-> **orchestrator + sub-agents**, and retrieval gains an agentic relaxation loop. The shape is still a
-> **Mastra workflow** (D7), *not* an agent-with-tools loop.
+> **orchestrator + sub-agents**, and the **finder becomes a model-driven, tool-using agent** that owns
+> retrieval + relaxation by calling catalog search tools. The spine is still a **Mastra workflow** (D7):
+> the agent-with-tools loop is *scoped inside the single `discover` step* (bounded by `FINDER_MAX_STEPS`),
+> not a top-level supervisor that owns the whole turn.
 
 **Decision:** Replace `classify → route → retrieve → generate` with `orchestrate → discover →
 generate`, where each step is a deterministic workflow step that calls one specialized agent for its
 single judgment:
 - **orchestrator** — decomposes the turn (multi-intent → several "finders"), classifies
-  `product`/`chitchat`/`off_catalog`, marks hard-vs-soft constraints, and flags continuations (D14).
-  One planning call per turn.
-- **discovery** (sub-agent) — called *only* when a finder's focused query is weak; proposes ordered
-  **relaxation axes** (drop a soft constraint / broaden a keyword), which code executes — computing the
-  deterministic `relaxed` fact (constraint + real catalog value) and merchandising several framed groups.
+  `product`/`chitchat`/`off_catalog`, marks hard-vs-soft constraints, and flags continuations (D14). It
+  is **category-aware**: the live catalog category list (cached, see below) is injected into its prompt,
+  so it routes against *real* categories and, for an off-catalog ask, still **merchandises** — spawning
+  finders that each target a real category slug (e.g. "flight to Tokyo" → `mobile-accessories`,
+  `sunglasses`, `womens-bags`). One planning call per turn.
+- **discovery** (the *finder* sub-agent) — runs once per finder; drives two catalog tools —
+  `product_search` (keyword) and `category_browse` (by slug) — to retrieve and, when too few match, relax
+  (broaden the keyword / browse a whole category / drop a *soft* constraint), then returns its chosen
+  products **by id** as ordered, framed groups. Code resolves ids → real products, enforces hard
+  constraints, dedups, and computes the deterministic `relaxed` fact (constraint + real catalog value).
 - **concierge** — chit-chat + the honest off-catalog decline (only when discovery returns nothing).
 - **generator** — unchanged role: grounded prose; holds conversation memory (D4).
 
@@ -362,9 +369,10 @@ single judgment:
 Mastra agents → visible in Studio), **not** tool-call delegation.
 
 **Two-tier budget (deterministic caps):** `MAX_PRODUCT_FINDERS` (.env, default 5) caps finders/turn
-(`slice` in orchestrate — the model may propose more, only N run); `DISCOVERY_MAX_CALLS` (.env, default
-10) caps catalog calls/finder (a decrementing counter). Worst case 5×10 = **50 calls/turn**, asserted in
-evals.
+(`slice` in orchestrate — the model may propose more, only N run); `FINDER_MAX_STEPS` (.env, default 4)
+caps the tool-calling turns per finder (Mastra `maxSteps` on the finder's `.generate()` — each step is
+one LLM call + tool cycle). Worst case 5 × 4 = **20 finder tool-loops/turn**. The finder cap is the model
+ceiling (`slice`, hard); the per-finder step cap is `maxSteps` (soft — the model usually stops earlier).
 
 **Concurrent fan-out:** finders run in `Promise.all` inside the single `discover` step — *not*
 workflow-level `.parallel()`/`.foreach()`. Finder count is dynamic (1–5); `.parallel` needs a static
@@ -373,17 +381,30 @@ once, cross-finder dedup, the turn ceiling). One step scope handles dynamic N, s
 holds the single stream writer so each group streams as its finder resolves. Finder-level tracing via
 `createChildSpan` keeps the top-level trace linear.
 
-**Grounding by construction (extends US-5.1):** products, prices, images, and the `relaxed` from/to
-values flow catalog → typed stream parts → never through an LLM. The model authors only *framing* —
-prose, each group's `rationale`, and suggestion-chip phrasing (chip *options* are data-derived and
-Zod-validated). Hard-constraint enforcement, both budgets, dedup, and the relaxed facts are code.
+**Categories as shared context (not a tool):** the 24 real catalog categories are fetched once and cached
+in-memory for 24h by a `CategoriesProvider` singleton (concurrent-`get()` dedup onto one in-flight
+promise; returns `[]` *uncached* on failure so the next turn retries and every consumer degrades to
+current behavior). The list is injected as **prompt text** into both the orchestrator and the finder, so
+the model routes/keywords against real slugs. It is **never** exposed as a raw endpoint-list tool — the
+finder *retrieves* through the two scoped search tools (`product_search`, `category_browse`), and the
+category list is context it picks slugs from.
+
+**Grounding by construction (extends US-5.1):** the model never *authors* product data. The finder sees
+only a **lean read-only view** (id/title/price/rating/stock/…) returned by the search tools and selects
+products **by id**; code resolves those ids → real `Product` objects captured from the tool calls,
+dropping any unknown/hallucinated id. Prices, images, and the `relaxed` from/to values flow catalog →
+typed stream parts → never authored by an LLM. The model authors only *framing* — prose, each group's
+`rationale`, and suggestion-chip phrasing (chip *options* are data-derived and Zod-validated).
+Hard-constraint enforcement (re-applied **inside** the search tools *and* again in assembly), the
+finder/turn caps, dedup, and the relaxed facts are code.
 
 **Model selection (updates D2/D7):** the orchestrator, discovery, and concierge run on
 **`gpt-5.4-mini`**, not nano. The per-turn judgments are now genuinely harder than "classify/extract" —
 hard-vs-soft constraints, what *not* to invent, which axis to relax without drifting off-topic — and
 nano was unreliable (over-marking plain "under $100" as hard; over-broadening relaxation into junk). We
-pay for stronger judgment rather than patch model output with regex. Discovery is mini despite running
-up to 5×/turn because it only fires on *weak* finders.
+pay for stronger judgment rather than patch model output with regex. Discovery is mini because it now
+drives multi-step tool use (search → read match counts → relax or browse) once per finder — judgment
+nano was inconsistent at, drifting off-topic when relaxing.
 
 **Observability:** structured logging via **`@mastra/loggers` PinoLogger** registered on the Mastra
 instance (replaced an ad-hoc `console.log` trace), level-gated by `LOG_LEVEL`, unified with Mastra's own
@@ -394,15 +415,25 @@ step/agent traces.
 off-catalog ask (US-4.1/4.2/4.4). The orchestrator also decides finder count dynamically (multi-intent,
 off-catalog adjacency) instead of a fixed extract.
 
-**Why hybrid over a full supervisor (agent-with-tools):** grounding by construction (products never
-enter an LLM turn), *provable* budget caps (`slice` + a counter, not soft `maxSteps`), and reuse of the
-injectable seams (`CatalogDeps`, `PartWriter`) the eval suite already fakes. Cost: no dynamic mid-turn
-re-planning by the model — an accepted, explicitly-preferred trade. Matches "a simpler solution you can
-defend."
+**Why scoped-agentic over a full supervisor (one model loop owning the turn):** the agentic loop is
+*scoped* — the finder calls tools to retrieve/relax, but inside a single workflow step, bounded by
+`FINDER_MAX_STEPS`, with its output **grounded by code** (ids → real products) and hard constraints
+re-enforced outside the model. The orchestrator (planning) and generator (prose) stay separate
+deterministic seams rather than one model-driven supervisor owning the whole turn. This keeps grounding
+by construction and reuse of the injectable seams (`CatalogDeps`, `PartWriter`) the eval suite fakes,
+while gaining **traced, model-driven retrieval** (each search/browse is a tool span). Cost: per-finder
+tool cost and a *soft* per-finder step cap (`maxSteps`) rather than a hard call counter — an accepted
+trade for traceability + adaptive relaxation.
 
 **Alternatives rejected:**
-- *Supervisor agent with tools (model calls retrieve/relax)* — flexible, but non-deterministic budgets,
-  breaks grounding (the model would handle product data), pricier, harder to eval.
+- *Full supervisor owning the whole turn (one model loop calling retrieve/relax/respond)* — we adopted
+  agentic retrieval but kept it **scoped to the finder** with id-based grounding and a bounded tool-loop;
+  a single end-to-end supervisor would still break grounding (the model handling product data), lose the
+  separate provable finder cap, and be harder to eval.
+- *Deterministic budgeted relaxation loop (the original D13: a relaxation-planner agent + code-executed
+  axes, capped by a `DISCOVERY_MAX_CALLS` counter)* — replaced. It made catalog calls invisible in traces
+  and split retrieval logic between a planner agent and executor code; the tool-using finder is traceable
+  (a span per search) and keeps the relax decision with the agent that sees the results.
 - *Regex gate for hard-vs-soft / invented constraints* — tried and removed; the LLM should judge. (For
   continuations, D14 sidesteps invention deterministically instead.)
 - *Workflow `.parallel()` / `.foreach()` for fan-out* — a static array / isolated iterations don't fit a
