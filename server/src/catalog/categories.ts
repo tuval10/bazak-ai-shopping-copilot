@@ -5,6 +5,12 @@ export const categorySchema = z.object({
   slug: z.string(),
   name: z.string(),
   url: z.string().optional(),
+  /**
+   * How many products this category holds, derived from a single
+   * `/products?limit=0&select=category` count (US-1.6). Optional: present when the
+   * provider could enrich the list, omitted (and so dropped from the prompt) otherwise.
+   */
+  count: z.number().int().nonnegative().optional(),
 });
 export type Category = z.infer<typeof categorySchema>;
 
@@ -38,13 +44,21 @@ function normalize(s: string): string {
 }
 
 /**
- * Render the category list for prompt injection: one `slug — name` line per
- * category (empty string when there are none, so the caller can omit the block).
- * Slug-first because agents must copy the SLUG verbatim — `resolveCategorySlug`
+ * Render the category list for prompt injection: one `slug — name (N items)` line
+ * per category (the count is appended only when known, so a count-less list still
+ * renders cleanly). Empty string when there are none, so the caller can omit the
+ * block. Slug-first because agents must copy the SLUG verbatim — `resolveCategorySlug`
  * matches on exact slug first, and the finder/orchestrator emit slugs, not names.
+ * The count lets the orchestrator judge how thin a category is (e.g. broaden a
+ * finder when a category holds only a couple of items).
  */
 export function formatCategoryList(categories: Category[]): string {
-  return categories.map((c) => `${c.slug} — ${c.name}`).join("\n");
+  return categories
+    .map((c) => {
+      const suffix = c.count === undefined ? "" : ` (${c.count} ${c.count === 1 ? "item" : "items"})`;
+      return `${c.slug} — ${c.name}${suffix}`;
+    })
+    .join("\n");
 }
 
 /**

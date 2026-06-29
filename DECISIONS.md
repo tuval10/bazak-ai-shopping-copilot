@@ -389,6 +389,16 @@ the model routes/keywords against real slugs. It is **never** exposed as a raw e
 finder *retrieves* through the two scoped search tools (`product_search`, `category_browse`), and the
 category list is context it picks slugs from.
 
+**Per-category counts (one call, not 24):** each category line carries its size — `slug — name (N items)`
+— so the orchestrator can judge how thin a category is and broaden a finder when the best-fit category
+holds only a couple of items (its motivating case: "flight to Tokyo" → if a bag category is tiny, ask the
+finder for any bag and let it decide fit). The counts come from a **single** `/products?limit=0&select=category`
+request (the whole 194-product catalog, category field only — ~7 KB) tallied client-side, **not** 24
+per-category calls; it runs concurrently with the category-list fetch behind the same 24h cache (two cached
+calls/day total). Counts are a **nice-to-have**: if that one call fails, the list still serves *without*
+counts (the `(N items)` suffix is simply dropped) rather than failing the turn. Counts inform *planning
+breadth* only — they don't change grounding or the finder's own match-count-driven relaxation.
+
 **Grounding by construction (extends US-5.1):** the model never *authors* product data. The finder sees
 only a **lean read-only view** (id/title/price/rating/stock/…) returned by the search tools and selects
 products **by id**; code resolves those ids → real `Product` objects captured from the tool calls,

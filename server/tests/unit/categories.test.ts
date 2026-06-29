@@ -49,6 +49,22 @@ describe("formatCategoryList", () => {
     expect(out).toBe("smartphones — smartphones\nmens-watches — mens watches");
   });
 
+  it("appends '(N items)' when a count is known", () => {
+    const out = formatCategoryList([
+      { slug: "laptops", name: "laptops", count: 5 },
+      { slug: "skin-care", name: "skin care", count: 3 },
+    ]);
+    expect(out).toBe("laptops — laptops (5 items)\nskin-care — skin care (3 items)");
+  });
+
+  it("uses the singular 'item' for a count of 1 and omits the suffix when count is unknown", () => {
+    const out = formatCategoryList([
+      { slug: "womens-bags", name: "womens bags", count: 1 },
+      { slug: "laptops", name: "laptops" }, // no count → no suffix
+    ]);
+    expect(out).toBe("womens-bags — womens bags (1 item)\nlaptops — laptops");
+  });
+
   it("returns an empty string for no categories", () => {
     expect(formatCategoryList([])).toBe("");
   });

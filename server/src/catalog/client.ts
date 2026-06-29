@@ -4,6 +4,7 @@ import {
   productListResponseSchema,
   productSchema,
 } from "@bazak/shared";
+import { z } from "zod";
 import { logger } from "../observability/logger";
 import { type Category, categoryListSchema } from "./categories";
 
@@ -98,6 +99,24 @@ export async function listProducts(page: PageParams = {}): Promise<ProductListRe
 export async function getCategories(): Promise<Category[]> {
   const data = await fetchJson(buildUrl("/products/categories", {}));
   return categoryListSchema.parse(data);
+}
+
+/** Just the `category` field of every product — enough to count per category. */
+const categoryFieldResponseSchema = z.object({
+  products: z.array(z.object({ category: z.string() })),
+});
+
+/**
+ * Product count per category slug, from ONE `/products?limit=0&select=category`
+ * call (the whole catalog, category field only — ~7KB). Avoids 24 per-category
+ * round-trips. Used to enrich the cached category list with sizes (US-1.6).
+ */
+export async function getCategoryCounts(): Promise<Map<string, number>> {
+  const data = await fetchJson(buildUrl("/products", { limit: 0, select: "category" }));
+  const { products } = categoryFieldResponseSchema.parse(data);
+  const counts = new Map<string, number>();
+  for (const p of products) counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
+  return counts;
 }
 
 /** `/products/{id}` — a single product. */

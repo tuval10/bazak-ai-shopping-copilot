@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CatalogError,
   getCategories,
+  getCategoryCounts,
   getCategoryProducts,
   getProduct,
   searchProducts,
@@ -58,6 +59,27 @@ describe("catalog client", () => {
     ]);
     const cats = await getCategories();
     expect(cats.map((c) => c.slug)).toEqual(["smartphones", "laptops"]);
+  });
+
+  it("getCategoryCounts fetches the whole catalog (category field only) in ONE call and counts per slug", async () => {
+    const { calls } = mockFetchOnce({
+      products: [
+        { category: "laptops" },
+        { category: "smartphones" },
+        { category: "laptops" },
+        { category: "laptops" },
+      ],
+      total: 4,
+    });
+    const counts = await getCategoryCounts();
+
+    expect(counts.get("laptops")).toBe(3);
+    expect(counts.get("smartphones")).toBe(1);
+    const url = new URL(calls[0]!);
+    expect(url.pathname).toBe("/products");
+    expect(url.searchParams.get("limit")).toBe("0"); // 0 → all products
+    expect(url.searchParams.get("select")).toBe("category"); // trim payload to one field
+    expect(calls).toHaveLength(1); // not 24 per-category calls
   });
 
   it("getProduct parses a single product", async () => {
