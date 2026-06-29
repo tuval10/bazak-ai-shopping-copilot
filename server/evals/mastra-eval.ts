@@ -1,6 +1,7 @@
 import type { WorkflowInput, WorkflowOutput } from "@bazak/shared";
 import { Mastra } from "@mastra/core";
 import { LibSQLStore } from "@mastra/libsql";
+import { createChipsAgent } from "../src/mastra/agents/chips";
 import { createDiscoveryAgent } from "../src/mastra/agents/discovery";
 import { createSupervisorAgent } from "../src/mastra/agents/supervisor";
 import { createMemory } from "../src/mastra/memory";
@@ -23,6 +24,8 @@ export const evalMastra = new Mastra({
   agents: {
     supervisor: createSupervisorAgent(createMemory(":memory:")),
     discovery: createDiscoveryAgent(),
+    // `converseStep` resolves a `chips` agent for context-aware suggestion chips.
+    chips: createChipsAgent(),
   },
   workflows: { pipeline: pipelineWorkflow },
 });
