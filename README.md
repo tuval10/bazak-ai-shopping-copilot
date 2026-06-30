@@ -457,7 +457,13 @@ scenario set; long-horizon multi-turn memory issues; and visual/UX regressions b
 - **Local single-user assumptions** — no auth, no rate-limiting, and only a **basic** stay-in-lane /
   prompt-injection refusal (the app runs locally with the developer's own key — FUTURE.md *Security & Abuse*).
 - **No product-detail view, no ranking-personalization, no analytics**, and chips are basic (FUTURE.md).
+- **No conversation management in the UI** — the server supports deleting a thread
+  (`DELETE /api/memory/threads/{id}`), but the UI doesn't yet surface **"delete conversation"** or a
+  **"delete all conversations"** action, so clearing history means calling the endpoint directly.
+- **No response feedback (like / unlike)** — there's no thumbs-up/down on an assistant reply. Beyond the
+  UX gap, this is a missed **evaluation** signal: captured likes/unlikes would seed new real-world scenarios
+  for the LLM-judge eval suite over time (turning live feedback into regression cases).
 - **With another week:** add a latency budget + timeouts and token-stream the prose; a product-detail
-  ("tell me more") view; fold remembered preferences into retrieval ranking; an analytics/eval dashboard and
-  broader eval scenario coverage; and auth + rate-limiting if it ever goes multi-tenant.
-```
+  ("tell me more") view; **delete-conversation + delete-all actions** in the UI; a **like/unlike feedback
+  loop** that feeds new eval scenarios; fold remembered preferences into retrieval ranking; an analytics/eval
+  dashboard and broader eval scenario coverage; and auth + rate-limiting if it ever goes multi-tenant.
