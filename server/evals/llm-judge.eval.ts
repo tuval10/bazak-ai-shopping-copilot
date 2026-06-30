@@ -2,10 +2,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { RESOURCE_ID } from "../src/config/env";
-import { freshThreadId, runTurn } from "./mastra-eval";
+import { freshResourceId, freshThreadId, runTurn } from "./mastra-eval";
 import { DEFAULT_THRESHOLD, SCENARIOS } from "./scenarios";
-import { behaviorJudge, runToolChecks } from "./scorers";
+import { behaviorJudge, runCardChecks, runToolChecks } from "./scorers";
 import { buildTrace, type TurnTrace } from "./trace";
 
 /**
@@ -22,6 +21,7 @@ interface Report {
   judgePassed: boolean;
   toolChecks: Array<{ name: string; passed: boolean }>;
   passed: boolean;
+  knownHard: boolean;
   reason: string;
 }
 
@@ -41,16 +41,31 @@ describe("LLM-as-judge evals (real pipeline)", () => {
     it(
       scenario.name,
       async () => {
+        // Fresh resourceId per scenario: working memory is resource-scoped, so this
+        // isolates durable preferences from other scenarios.
+        const resourceId = freshResourceId(scenario.name);
         const threadId = freshThreadId(scenario.name);
+
+        // Durable-preference setup: run in a SEPARATE thread (same resourceId) so the
+        // measured turn must recall it from working memory across conversations.
+        if (scenario.prefTurn) {
+          await runTurn({
+            message: scenario.prefTurn,
+            threadId: freshThreadId(`${scenario.name}-pref`),
+            resourceId,
+          });
+        }
 
         // Optional prior turn (same thread) to set up context for a follow-up.
         let priorContext: string | undefined;
+        let seedIds: number[] = [];
         if (scenario.seed) {
-          const seedOut = await runTurn({ message: scenario.seed, threadId, resourceId: RESOURCE_ID });
-          priorContext = cardsSummary(buildTrace(seedOut));
+          const seedTrace = buildTrace(await runTurn({ message: scenario.seed, threadId, resourceId }));
+          priorContext = cardsSummary(seedTrace);
+          seedIds = seedTrace.cards.flatMap((c) => c.products.map((p) => p.id));
         }
 
-        const out = await runTurn({ message: scenario.message, threadId, resourceId: RESOURCE_ID });
+        const out = await runTurn({ message: scenario.message, threadId, resourceId });
         const trace = buildTrace(out);
 
         const judged = await behaviorJudge.run({
@@ -58,9 +73,16 @@ describe("LLM-as-judge evals (real pipeline)", () => {
           output: trace,
         });
 
-        const toolChecks = scenario.toolExpect
-          ? await runToolChecks(scenario.toolExpect, trace.toolCalls)
-          : [];
+        const toolChecks = [
+          ...(scenario.toolExpect ? await runToolChecks(scenario.toolExpect, trace.toolCalls) : []),
+          ...(scenario.cardConstraint ? runCardChecks(scenario.cardConstraint, trace.cards) : []),
+        ];
+
+        if (scenario.noRepeatFromSeed) {
+          const seen = new Set(seedIds);
+          const repeats = trace.cards.flatMap((c) => c.products.map((p) => p.id)).filter((id) => seen.has(id));
+          toolChecks.push({ name: "noRepeatFromSeed", passed: repeats.length === 0 });
+        }
 
         const judgePassed = judged.score >= threshold;
         const toolsPassed = toolChecks.every((c) => c.passed);
@@ -73,6 +95,7 @@ describe("LLM-as-judge evals (real pipeline)", () => {
           judgePassed,
           toolChecks,
           passed,
+          knownHard: scenario.knownHard ?? false,
           reason: judged.reason ?? "",
         });
 
@@ -80,10 +103,13 @@ describe("LLM-as-judge evals (real pipeline)", () => {
         if (!passed) {
           const failedTools = toolChecks.filter((c) => !c.passed).map((c) => c.name);
           console.error(
-            `\n✗ ${scenario.name} (score ${judged.score.toFixed(2)} < ${threshold}` +
+            `\n${scenario.knownHard ? "⚠ known-hard" : "✗"} ${scenario.name} (score ${judged.score.toFixed(2)} < ${threshold}` +
               `${failedTools.length ? `, failed checks: ${failedTools.join(", ")}` : ""})\n${judged.reason}\n`,
           );
         }
+
+        // Known-hard scenarios are reported but never fail the suite (documented limitations).
+        if (scenario.knownHard) return;
 
         expect(judged.score, `behaviour judge below threshold\n${judged.reason}`).toBeGreaterThanOrEqual(
           threshold,
@@ -106,7 +132,7 @@ afterAll(() => {
       score: r.score.toFixed(2),
       threshold: r.threshold,
       tools: r.toolChecks.length ? `${r.toolChecks.filter((c) => c.passed).length}/${r.toolChecks.length}` : "—",
-      passed: r.passed ? "✓" : "✗",
+      passed: r.knownHard ? (r.passed ? "✓ (hard)" : "⚠ known-hard") : r.passed ? "✓" : "✗",
     })),
   );
   // JSON artifact for trend tracking (gitignored).

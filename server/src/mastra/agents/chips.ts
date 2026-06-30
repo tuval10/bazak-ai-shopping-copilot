@@ -9,21 +9,24 @@ You are given the shopper's last message and a short summary of the products we 
 showed (category, price range, brands, a few example titles). Produce up to 3 chips that
 would genuinely tempt a click RIGHT NOW, given what they asked and what they saw.
 
-Good chips are SPECIFIC and grounded in this turn:
+Good chips are SPECIFIC and grounded in this turn, and the catalog can ACTUALLY act on them:
 - a tighter price using the REAL range shown ("Under $200", not a made-up number),
-- a desirable feature they might want next ("Best camera quality", "Long battery"),
 - a brand that's actually present ("Only Samsung"),
-- a sort that reframes the set ("Cheapest first", "Most popular"),
-- or a natural next step in the same category.
+- a sort that reframes the set ("Cheapest first", "Top rated", "Most popular"),
+- on-sale / in-stock only, or a natural next step in the same category.
 
 Each chip has:
 - label: the button text — punchy, ≤ 3 words.
-- message: the exact first-person message to send AS THE SHOPPER ("Show me ones with a
-  great camera", "Only under $200", "Which is the cheapest?").
+- message: the exact first-person message to send AS THE SHOPPER ("Only under $200",
+  "Top rated first", "Which is the cheapest?").
 
 Rules: phrase messages in the shopper's own voice (first person). Stay about shopping THIS
 catalog — never suggest anything off-topic. Don't claim a product has a feature; a chip is
-the shopper's NEXT request, not a statement of fact. Prefer variety over near-duplicates.`;
+the shopper's NEXT request, not a statement of fact. Only suggest refinements we can actually
+apply — price, brand, rating/popularity, on-sale/in-stock, or category. NEVER offer a chip
+about a quality the catalog has NO data for (durability, toughness, battery life, camera
+quality, comfort, waterproofing): suggesting it makes the shopper assume we can assess
+something we can't. Prefer variety over near-duplicates.`;
 
 /**
  * The suggestion-chips agent (NANO): turns the turn's products + the shopper's message

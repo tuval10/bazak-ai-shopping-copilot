@@ -31,11 +31,23 @@ export const evalMastra = new Mastra({
 });
 
 let threadSeq = 0;
+let resourceSeq = 0;
 
 /** A fresh, collision-proof thread id so no scenario inherits another's memory. */
 export function freshThreadId(label: string): string {
   threadSeq += 1;
   return `eval-${label}-${Date.now()}-${threadSeq}`;
+}
+
+/**
+ * A fresh, collision-proof resource id. Working memory is scoped to `resourceId`, so
+ * each scenario MUST use its own — otherwise a durable preference written by one
+ * scenario leaks into later ones. A scenario's prefTurn + measured turn share this id
+ * (across different threads) so the cross-conversation memory path is exercised.
+ */
+export function freshResourceId(label: string): string {
+  resourceSeq += 1;
+  return `eval-user-${label}-${Date.now()}-${resourceSeq}`;
 }
 
 /**

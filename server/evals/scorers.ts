@@ -6,7 +6,7 @@ import {
 } from "@mastra/core/evals";
 import { checks } from "@mastra/evals/checks";
 import { z } from "zod";
-import { type ToolExpect } from "./scenarios";
+import { type CardConstraint, type ToolExpect } from "./scenarios";
 import { toToolCallMessages, type TurnTrace } from "./trace";
 
 /**
@@ -155,5 +155,53 @@ export async function runToolChecks(
     const r = await scorer.run({ input: EMPTY_AGENT_INPUT, output });
     results.push({ name, passed: r.score === 1 });
   }
+
+  // No `@mastra/evals` check inspects tool ARGS, so the category guard is a plain
+  // predicate over the recorded find_products calls (their `category` arg).
+  if (expect.finderCategoryNotIn?.length) {
+    const banned = new Set(expect.finderCategoryNotIn.map((s) => s.toLowerCase()));
+    const used = toolCalls
+      .filter((c) => c.tool === "find_products")
+      .map((c) => String((c.args as { category?: string } | undefined)?.category ?? "").toLowerCase())
+      .filter(Boolean);
+    const offending = used.filter((cat) => banned.has(cat));
+    results.push({
+      name: `finderCategoryNotIn(${expect.finderCategoryNotIn.join("|")})`,
+      passed: offending.length === 0,
+    });
+  }
+
+  // Provable cap: count find_products calls that actually RAN (refused ones carry
+  // outcome "limitReached") and assert the pipeline kept them within the ceiling.
+  if (expect.finderRunsAtMost !== undefined) {
+    const runs = toolCalls.filter(
+      (c) => c.tool === "find_products" && c.outcome !== "limitReached",
+    ).length;
+    results.push({
+      name: `finderRunsAtMost(${expect.finderRunsAtMost})`,
+      passed: runs <= expect.finderRunsAtMost,
+    });
+  }
+
   return results;
+}
+
+/**
+ * Deterministic, grounded checks over the products actually shown (from the trace
+ * cards) — e.g. a respected hard price ceiling. No LLM involved.
+ */
+export function runCardChecks(c: CardConstraint, cards: TurnTrace["cards"]): ToolCheckResult[] {
+  const products = cards.flatMap((g) => g.products);
+  const out: ToolCheckResult[] = [];
+  if (c.maxPrice !== undefined) {
+    const over = products.filter((p) => p.price > (c.maxPrice as number));
+    // No matching products is acceptable (honest "none qualify"); only OVER-budget cards fail.
+    out.push({ name: `cards≤$${c.maxPrice}`, passed: over.length === 0 });
+  }
+  if (c.everyBrand) {
+    const brand = c.everyBrand.toLowerCase();
+    const wrong = products.filter((p) => (p.brand ?? "").toLowerCase() !== brand);
+    out.push({ name: `everyBrand=${c.everyBrand}`, passed: products.length > 0 && wrong.length === 0 });
+  }
+  return out;
 }
