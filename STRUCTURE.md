@@ -7,9 +7,9 @@ The repository is a workspace of three packages, each with its own test suite:
 - **`frontend/`** — our own Next.js chat app on `@mastra/client-js` (no chat framework).
 
 This implies a **decoupled** topology: a standalone Mastra/Node **server** and a separate **frontend**
-app (resolving the standalone-server alternative noted in [ARCHITECTURE.md](ARCHITECTURE.md) §10, rather
-than a single Next.js full-stack host). See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit and
-[DECISIONS.md](DECISIONS.md) for why (`Dn`); story tags below are `US-x` from [USER_STORIES.md](USER_STORIES.md).
+app (rather than a single Next.js full-stack host). See [README.md](README.md) (*Architecture & Framework
+Choice*) for how the pieces fit and [DECISIONS.md](DECISIONS.md) for why (`Dn`); story tags below are
+`US-x` from [USER_STORIES.md](USER_STORIES.md).
 
 ```
 bazak-ai-shopping-copilot/
@@ -37,7 +37,7 @@ shared/
 │   │   ├── product-results.ts  # Zod: ProductResultsPart { intent, products[] } — the D6 stream part
 │   │   ├── conversation.ts     # Zod: ConversationSummary, MessageHistory      US-3.x
 │   │   ├── profile.ts          # Zod: remembered-preferences (working memory)  US-7.x
-│   │   └── api.ts              # request/response contracts for every endpoint (§6 of ARCHITECTURE)
+│   │   └── api.ts              # request/response contracts for every endpoint (README → HTTP / streaming API)
 │   ├── types/
 │   │   └── index.ts            # z.infer types re-exported for TS consumers
 │   └── index.ts               # barrel export

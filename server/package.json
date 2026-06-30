@@ -20,6 +20,7 @@
     "@mastra/libsql": "^1.14.2",
     "@mastra/loggers": "^1.2.0",
     "@mastra/memory": "^1.21.2",
+    "@mastra/observability": "^1.15.2",
     "ai": "^7.0.4",
     "zod": "^3.25.76"
   },
